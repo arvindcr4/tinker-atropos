@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Dict
 from tinker.types import ModelInput, SamplingParams
 from transformers import AutoTokenizer
 
@@ -86,3 +86,21 @@ class TinkerInferenceWrapper:
         self.current_sampling_client = new_client
 
         print(f"Updated inference weights to: {model_path}")
+
+    def messages_to_prompt(self, messages: List[Dict[str, str]]) -> str:
+        # Try to use tokenizer's chat template
+        if hasattr(self.tokenizer, "apply_chat_template"):
+            try:
+                return self.tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+            except Exception:
+                pass
+
+        prompt_parts = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            prompt_parts.append(f"{role}: {content}")
+
+        return "\n".join(prompt_parts) + "\nassistant:"
