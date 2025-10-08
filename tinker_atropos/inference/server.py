@@ -1,5 +1,11 @@
 from fastapi import FastAPI, HTTPException
-from tinker_atropos.types import CompletionRequest, CompletionResponse, UpdateWeightsRequest
+from tinker_atropos.types import (
+    CompletionRequest,
+    CompletionResponse,
+    UpdateWeightsRequest,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+)
 from tinker_atropos.inference.wrapper import TinkerInferenceWrapper
 
 import time
@@ -72,6 +78,44 @@ async def completions(request: CompletionRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+
+
+@app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
+async def chat_completions(request: ChatCompletionRequest):
+    if wrapper is None:
+        raise HTTPException(status_code=503, detail="Wrapper not initialized")
+
+    try:
+        messages_dict = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+        prompt = wrapper.messages_to_prompt(messages_dict)
+
+        completions_list = await wrapper.generate(
+            prompts=[prompt],
+            max_tokens=request.max_tokens,
+            temperature=request.temperature,
+            stop=request.stop,
+        )
+
+        choices = [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": completions_list[0],
+                },
+                "index": 0,
+                "finish_reason": "stop",
+            }
+        ]
+
+        return ChatCompletionResponse(
+            id=f"chatcmpl-{uuid.uuid4().hex[:24]}",
+            choices=choices,
+            created=int(time.time()),
+            model=current_model_name,
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chat completion failed: {str(e)}")
 
 
 @app.post("/internal/update_weights")
