@@ -1,5 +1,6 @@
 from typing import List
 from tinker.types import ModelInput, SamplingParams
+from transformers import AutoTokenizer
 
 import asyncio
 import tinker
@@ -24,10 +25,9 @@ class TinkerInferenceWrapper:
         else:
             self.current_sampling_client = initial_sampling_client
 
-        # Get tokenizer from training client (or sampling client if available)
-        # TODO: Figure out the best way to get tokenizer
-        # This will probably be pulling and loading the one from HF based on basemodel params
-        self.tokenizer = None
+        # Get tokenizer from HuggingFace
+        self.tokenizer = AutoTokenizer.from_pretrained(base_model)
+        print(f"Loaded tokenizer for {base_model}")
 
     async def generate(
         self,
@@ -53,8 +53,6 @@ class TinkerInferenceWrapper:
         temperature: float,
         stop: List[str] | None,
     ) -> str:
-        # TODO: Need tokenizer to convert prompt string to tokens
-        # For now, assuming we can get tokens somehow
         if self.tokenizer is None:
             raise RuntimeError("Tokenizer not initialized. Need to set up tokenizer.")
 
@@ -69,7 +67,7 @@ class TinkerInferenceWrapper:
             stop=stop if stop else [],
         )
 
-        # Sample from Tinker (doub le await pattern)
+        # Sample from Tinker (double await pattern)
         result_future = await client.sample_async(
             prompt=model_input,
             sampling_params=sampling_params,
