@@ -67,13 +67,12 @@ class TinkerInferenceWrapper:
             stop=stop if stop else [],
         )
 
-        # Sample from Tinker (double await pattern)
-        result_future = await client.sample_async(
+        # Sample from Tinker
+        result = await client.sample_async(
             prompt=model_input,
             sampling_params=sampling_params,
             num_samples=1,
         )
-        result = await result_future.result_async()
 
         # Decode tokens back to string
         completion_tokens = result.sequences[0].tokens
