@@ -1,48 +1,9 @@
 """Data processing for converting Atropos to Tinker format."""
 from typing import List, Dict, Any, Tuple
 import math
-from tinker.types import Datum
+from tinker.types import Datum, ModelInput
 import numpy as np
 import torch
-
-
-def trajectories_to_data(
-    trajectory_groups: List[Dict[str, Any]]
-) -> Tuple[List[Datum], Dict[str, Any]]:
-    data = []
-    metadata = {
-        "num_groups": len(trajectory_groups),
-        "num_trajectories": 0,
-        "mean_reward": 0.0,
-    }
-
-    all_rewards = []
-
-    for group in trajectory_groups:
-        # Each group has: prompts, responses, scores
-        prompts = group.get("prompts", [])
-        responses = group.get("responses", [])
-        scores = group.get("scores", [])
-
-        if not prompts or not responses or not scores:
-            continue
-
-        # Compute advantages (center rewards within group)
-        advantages = compute_advantages(scores)
-        all_rewards.extend(scores)
-
-        # Convert each trajectory to Datum
-        for prompt, response, advantage in zip(prompts, responses, advantages):
-            datum = trajectory_to_datum(prompt, response, advantage)
-            if datum is not None:
-                data.append(datum)
-
-        metadata["num_trajectories"] += len(prompts)
-
-    if all_rewards:
-        metadata["mean_reward"] = np.mean(all_rewards)
-
-    return data, metadata
 
 
 def compute_advantages(scores: List[float]) -> List[float]:
@@ -55,18 +16,6 @@ def compute_advantages(scores: List[float]) -> List[float]:
 def pad_data_to_good_offset(
     data: Dict[str, Any], batch_size: int
 ) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]:
-    """
-    Pad data to good GPU-friendly offsets and prepare batches.
-
-    This implements the same logic as grpo.py's pad_data_to_good_offset.
-
-    Args:
-        data: Dictionary with 'batch' key containing list of items
-        batch_size: Size of each batch
-
-    Returns:
-        Tuple of (token_batches, label_batches, advantage_batches)
-    """
     max_token_len = max([max([len(x) for x in item["tokens"]]) for item in data["batch"]])
     # Usually 64 is a good choice to ensure non-weird scaling behavior on GPUs
     # So we pad to the nearest multiple of 64
@@ -140,26 +89,68 @@ def pad_data_to_good_offset(
     return token_batches, label_batches, advantage_batches
 
 
+def convert_batch_to_tinker_data(
+    tokens: torch.Tensor,
+    labels: torch.Tensor,
+    advantages: torch.Tensor,
+) -> List[Datum]:
+    batch_size = tokens.shape[0]
+    data = []
+
+    for i in range(batch_size):
+        # Get token sequence for this item (as list of ints)
+        token_ids = tokens[i].tolist()
+
+        # Create ModelInput from tokens
+        model_input = ModelInput.from_ints(token_ids)
+
+        # Get labels and advantage for this item
+        label_ids = labels[i]  # Keep as tensor for now
+        advantage_value = advantages[i].item()  # Get scalar value
+
+        # Create loss_fn_inputs dictionary
+        # The labels tensor tells us which tokens to compute loss on
+        # Advantage is used for weighting the loss
+        loss_fn_inputs = {
+            "target_tokens": label_ids,  # Tinker will convert tensor automatically
+            "advantage": advantage_value,
+        }
+
+        # Create Datum
+        datum = Datum(
+            model_input=model_input,
+            loss_fn_inputs=loss_fn_inputs,
+        )
+        data.append(datum)
+
+    return data
+
+
 def trajectory_to_datum(
-    prompt: str,
-    response: str,
+    tokens: List[int],
+    mask: List[int],
     advantage: float,
-) -> Datum | None:
-    """Convert a single trajectory to a Tinker Datum.
+) -> Datum:
+    # Create ModelInput from tokens
+    model_input = ModelInput.from_ints(tokens)
 
-    Note: This is a placeholder. Need to figure out:
-    1. How to get tokens and logprobs from Atropos trajectories
-    2. Proper format for loss_fn_inputs
-    """
-    # TODO: Implement proper conversion
-    # For now, this is a placeholder that will fail
+    # Convert mask to labels format (-100 for ignored tokens, token_id for trained tokens)
+    # In the mask: 1 means we compute loss on this token, 0 means we ignore it
+    labels = []
+    for i, (token, mask_val) in enumerate(zip(tokens, mask)):
+        if mask_val == 1:
+            labels.append(token)
+        else:
+            labels.append(-100)  # -100 is the ignore index
 
-    # Need to:
-    # 1. Get target_tokens from response
-    # 2. Get logprobs from sampling (stored in trajectory)
-    # 3. Build ModelInput from prompt + response tokens
+    # Create loss_fn_inputs
+    loss_fn_inputs = {
+        "target_tokens": torch.tensor(labels, dtype=torch.long),
+        "advantage": advantage,
+    }
 
-    raise NotImplementedError(
-        "trajectory_to_datum needs implementation. "
-        "Need to figure out how Atropos stores tokens and logprobs in trajectories."
+    # Create and return Datum
+    return Datum(
+        model_input=model_input,
+        loss_fn_inputs=loss_fn_inputs,
     )
