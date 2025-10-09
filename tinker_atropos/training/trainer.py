@@ -154,17 +154,24 @@ class TinkerAtroposTrainer:
         ):
             print(f"  Mini-batch {i+1}/{len(token_batches)}: tokens shape {tokens.shape}")
 
-            # TODO: Convert tokens/labels/advantages to Tinker format
-            # For now, this is a placeholder - we need to figure out how to:
-            # 1. Convert torch tensors to Tinker's Datum format
-            # 2. Pass advantages to the loss function
-            # This will need additional work to integrate with Tinker's API
+            # Convert batch to Tinker format
+            from tinker_atropos.training.data_processing import convert_batch_to_tinker_data
 
-            # Placeholder for actual training code
-            # data = convert_to_tinker_format(tokens, labels, advantages)
-            # fwd_bwd_result = await self.training_client.forward_backward_async(...)
+            data = convert_batch_to_tinker_data(tokens, labels, advantages)
+            print(f"  Converted to {len(data)} Datum objects")
 
-            print("  TODO: Implement Tinker training for this mini-batch")
+            # Run forward-backward pass
+            print("  Running forward-backward pass...")
+            fwd_bwd_result = await self.training_client.forward_backward_async(
+                data, loss_fn="grpo"  # Using GRPO loss function
+            )
+            # fwd_bwd_result = await fwd_bwd_future.result_async()
+
+            # Accumulate loss
+            if hasattr(fwd_bwd_result, "loss"):
+                batch_loss = fwd_bwd_result.loss
+                total_loss += batch_loss
+                print(f"  Batch {i+1} loss: {batch_loss:.4f}")
 
         print("Running optimizer step...")
         adam_params = AdamParams(learning_rate=self.learning_rate)
