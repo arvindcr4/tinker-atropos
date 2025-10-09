@@ -113,7 +113,7 @@ def convert_batch_to_tinker_data(
         # Advantage is used for weighting the loss
         loss_fn_inputs = {
             "target_tokens": label_ids,  # Tinker will convert tensor automatically
-            "advantage": advantage_value,
+            "advantage": torch.tensor([advantage_value]),  # Convert to tensor
         }
 
         # Create Datum
@@ -146,7 +146,7 @@ def trajectory_to_datum(
     # Create loss_fn_inputs
     loss_fn_inputs = {
         "target_tokens": torch.tensor(labels, dtype=torch.long),
-        "advantage": advantage,
+        "advantage": torch.tensor([advantage]),  # Convert to tensor
     }
 
     # Create and return Datum
