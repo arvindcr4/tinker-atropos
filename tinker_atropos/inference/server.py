@@ -90,21 +90,23 @@ async def chat_completions(request: ChatCompletionRequest):
         prompt = wrapper.messages_to_prompt(messages_dict)
 
         completions_list = await wrapper.generate(
-            prompts=[prompt],
+            prompt=prompt,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
             stop=request.stop,
+            num_samples=request.n,
         )
 
         choices = [
             {
                 "message": {
                     "role": "assistant",
-                    "content": completions_list[0],
+                    "content": completion,
                 },
-                "index": 0,
+                "index": i,
                 "finish_reason": "stop",
             }
+            for i, completion in enumerate(completions_list)
         ]
 
         return ChatCompletionResponse(

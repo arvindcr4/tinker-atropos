@@ -2,7 +2,6 @@ from typing import List, Dict
 from tinker.types import ModelInput, SamplingParams
 from transformers import AutoTokenizer
 
-import asyncio
 import tinker
 
 
@@ -31,28 +30,12 @@ class TinkerInferenceWrapper:
 
     async def generate(
         self,
-        prompts: List[str],
+        prompt: str,
         max_tokens: int = 100,
         temperature: float = 0.7,
         stop: List[str] | None = None,
-        **kwargs,
+        num_samples: int = 1,
     ) -> List[str]:
-        # Convert prompts to ModelInput and generate
-        tasks = [
-            self._generate_one(self.current_sampling_client, prompt, max_tokens, temperature, stop)
-            for prompt in prompts
-        ]
-        completions = await asyncio.gather(*tasks)
-        return completions
-
-    async def _generate_one(
-        self,
-        client: tinker.SamplingClient,
-        prompt: str,
-        max_tokens: int,
-        temperature: float,
-        stop: List[str] | None,
-    ) -> str:
         if self.tokenizer is None:
             raise RuntimeError("Tokenizer not initialized. Need to set up tokenizer.")
 
@@ -67,18 +50,17 @@ class TinkerInferenceWrapper:
             stop=stop if stop else [],
         )
 
-        # Sample from Tinker
-        result = await client.sample_async(
+        # Sample from Tinker with num_samples
+        result = await self.current_sampling_client.sample_async(
             prompt=model_input,
             sampling_params=sampling_params,
-            num_samples=1,
+            num_samples=num_samples,
         )
 
-        # Decode tokens back to string
-        completion_tokens = result.sequences[0].tokens
-        completion_text = self.tokenizer.decode(completion_tokens)
+        # Decode all sequences to strings
+        completions = [self.tokenizer.decode(sequence.tokens) for sequence in result.sequences]
 
-        return completion_text
+        return completions
 
     async def update_weights(self, model_path: str) -> None:
         new_client = self.service_client.create_sampling_client(model_path=model_path)
