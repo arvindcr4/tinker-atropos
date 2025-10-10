@@ -1,35 +1,19 @@
-"""Main training loop for Tinker-Atropos integration."""
 import asyncio
-import json
 import os
 import time
-import torch
 import requests
-import uuid
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Any, List
 import tinker
 from tinker.types import AdamParams
 
-from pydantic import BaseModel, Field
+import math
+import numpy as np
+import torch
+
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 WANDB_GROUP = ""
-WANDB_PROJECT = ""
-
-
-class TrainingConfig(BaseModel):
-    lr: float = Field(1e-5, description="Learning rate for the optimizer")
-    training_steps: int = Field(10, description="Number of training steps")
-    batch_size: int = Field(2, description="Batch size for training (will be handled by get_data)")
-    seq_len: int = Field(2048, description="Sequence length for training")
-    gradient_accumulation_steps: int = Field(
-        32, description="Number of gradient accumulation steps"
-    )
-
-    # Wandb configuration
-    use_wandb: bool = Field(False, description="Whether to use Weights & Biases for logging")
-    wandb_project: Optional[str] = Field(None, description="Wandb project name")
-    wandb_group: Optional[str] = Field(None, description="Wandb group name")
+WANDB_PROJECT = "grpo-tinker-example-test"
 
 
 class TinkerAtroposTrainer:
@@ -41,7 +25,6 @@ class TinkerAtroposTrainer:
         atropos_api_url: str = "http://localhost:8000",
         inference_service_url: str = "http://localhost:8001",
         num_steps: int = 100,
-        train_config: TrainingConfig = None,
     ):
         self.base_model = base_model
         self.lora_rank = lora_rank
@@ -50,11 +33,11 @@ class TinkerAtroposTrainer:
         self.inference_service_url = inference_service_url
         self.num_steps = num_steps
 
+        # Will be initialized in setup()
         self.service_client = None
         self.training_client = None
         self.trainer_id = None
-        self.train_config = train_config
-        self.batches = []  # Store batches across training steps
+        self.batches = []
 
     async def setup(self):
         print("Setting up Tinker trainer...")
@@ -76,25 +59,31 @@ class TinkerAtroposTrainer:
 
         # Register with Atropos API
         print("Registering with Atropos API...")
-        self.trainer_id = await self._register_trainer(self.train_config)
+        self.trainer_id = await self._register_trainer()
         print(f"Registered as trainer: {self.trainer_id}")
 
-    async def _register_trainer(self, config: TrainingConfig) -> str:
-        requests.post(
-            "http://localhost:8000/register",
-            json={
-                "wandb_group": WANDB_GROUP,
-                "wandb_project": WANDB_PROJECT,
-                "batch_size": config.batch_size * config.gradient_accumulation_steps,
-                "max_token_len": config.seq_len,
-                "starting_step": 0,
-                "num_steps": self.num_steps,
-            },
-            timeout=10,
-        )
+    async def _register_trainer(self) -> str:
+        url = f"{self.atropos_api_url}/register"
 
-        # Dummy UUID for now
-        return uuid.uuid4()
+        payload = {
+            "wandb_group": WANDB_GROUP,
+            "wandb_project": WANDB_PROJECT,
+            "batch_size": 8,
+            "max_token_len": 2048,
+            "starting_step": 0,
+            "checkpoint_dir": "./temp/",
+            "save_checkpoint_interval": 0,
+            "num_steps": self.num_steps,
+        }
+
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+
+        result = response.json()
+        trainer_id = result.get("uuid")
+        print(f"Registered with Atropos API, trainer_id: {trainer_id}")
+
+        return trainer_id
 
     async def _update_inference_weights(self, model_path: str, step: int):
         url = f"{self.inference_service_url}/internal/update_weights"
@@ -106,29 +95,119 @@ class TinkerAtroposTrainer:
         print(f"Updated inference service with weights from step {step}")
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15))
-    def _get_batch(self) -> Dict:
-        data = requests.get(f"{self.atropos_api_url}/batch", timeout=10).json()
+    def get_batch(self):
+        data = requests.get("http://localhost:8000/batch", timeout=10).json()
         return data
 
-    def _get_data(self) -> List[Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]]:
-        from tinker_atropos.training.data_processing import pad_data_to_good_offset
+    def pad_data_to_good_offset(self, data: Dict[str, Any]) -> List[tinker.Datum]:
+        batch = data["batch"]
 
-        batches = []
+        max_token_len = max([max([len(x) for x in item["tokens"]]) for item in batch])
+        good_multiple = 64
+
+        if (max_token_len - 1) % good_multiple != 0:
+            max_token_len = math.ceil((max_token_len - 1) / good_multiple) * good_multiple
+            token_setup_len = max_token_len + 1
+        else:
+            token_setup_len = max_token_len
+            max_token_len = max_token_len - 1
+
+        datums = []
+
+        for item in batch:
+            scores = np.array(item["scores"])
+
+            # Normalize scores within group (if more than 1)
+            if len(scores) > 1:
+                scores = scores - scores.mean()
+                scores = scores / max(scores.std(), 1e-8)
+
+            # Handle overrides (set advantage to zero if specified)
+            if item.get("overrides") is not None:
+                for i in range(len(item["overrides"])):
+                    if item["overrides"][i].get("set_advantage_to_zero", False):
+                        scores[i] = 0
+
+            # Process each trajectory in the group
+            for i in range(len(item["tokens"])):
+                tokens = item["tokens"][i]
+                masks = item["masks"][i]
+                advantage = scores[i]
+
+                # Pad tokens and masks to token_setup_len
+                padded_tokens = np.concatenate(
+                    [
+                        np.array(tokens),
+                        np.zeros(max(0, token_setup_len - len(tokens)), dtype=np.int32),
+                    ]
+                )
+
+                padded_masks = np.concatenate(
+                    [
+                        np.array(masks),
+                        np.full(max(0, token_setup_len - len(tokens)), -100, dtype=np.int32),
+                    ]
+                )
+
+                # Shift for autoregressive modeling
+                input_tokens = padded_tokens[:-1]  # Input to model
+                target_tokens = padded_tokens[1:]  # What model should predict
+                target_masks = padded_masks[1:]  # Which tokens to train on
+
+                # Create per-token advantages (only for non-masked tokens)
+                advantages = np.where(
+                    target_masks != -100,
+                    advantage,  # Use advantage where mask is valid
+                    0.0,  # Zero advantage for padding
+                )
+
+                # TODO: Logprobs implementation from Atropos / Tinker inference
+                logprobs = np.zeros_like(advantages, dtype=np.float32)
+
+                # Create Datum
+                datum = tinker.Datum(
+                    model_input=tinker.ModelInput.from_ints(tokens=input_tokens.tolist()),
+                    loss_fn_inputs={
+                        "target_tokens": tinker.TensorData.from_torch(
+                            torch.tensor(target_tokens, dtype=torch.int64)
+                        ),
+                        "logprobs": tinker.TensorData.from_torch(
+                            torch.tensor(logprobs, dtype=torch.float32)
+                        ),
+                        "advantages": tinker.TensorData.from_torch(
+                            torch.tensor(advantages, dtype=torch.float32)
+                        ),
+                    },
+                )
+                datums.append(datum)
+
+        return datums
+
+    def get_data(self) -> List[tinker.Datum]:
+        import time
+        import json
+
+        all_datums = []
+
         while True:
-            data = self._get_batch()
-            if data["batch"] is not None:
+            data = self.get_batch()
+
+            if data.get("batch") is not None:
                 # Save the batch for debugging
                 with open("temp.json", "w", encoding="utf-8") as f:
                     json.dump(data, f)
-                # In case the inference runs ahead of the training, we loop until we don't have any more data
-                batches.append(pad_data_to_good_offset(data, self.train_config.batch_size))
-            elif len(batches) > 0:
-                # Return the batches
-                return batches
+
+                # Convert to Datums and accumulate
+                datums = self.pad_data_to_good_offset(data)
+                all_datums.extend(datums)
+            elif len(all_datums) > 0:
+                # Return all accumulated datums
+                return all_datums
             else:
+                # Wait for data
                 time.sleep(1)
 
-    async def train_step(self, step: int):
+    async def train_step(self, step: int) -> Dict[str, Any]:
         print(f"\n{'='*60}")
         print(f"Step {step}/{self.num_steps}")
         print(f"{'='*60}")
@@ -136,47 +215,33 @@ class TinkerAtroposTrainer:
         step_start = time.time()
         metrics = {"step": step}
 
-        # Get batches if we don't have any
         if len(self.batches) == 0:
-            print("Fetching batches from Atropos...")
-            self.batches = self._get_data()
-            print(f"Got {len(self.batches)} batch groups")
+            print("Fetching data from Atropos...")
+            self.batches = self.get_data()
+            print(f"Got {len(self.batches)} Datum objects")
 
-        # Pop a batch group (contains token_batches, label_batches, advantage_batches)
-        token_batches, label_batches, advantage_batches = self.batches.pop(0)
-        print(f"Processing batch group with {len(token_batches)} mini-batches")
+        data = self.batches
+        self.batches = []  # Clear after using
 
-        total_loss = 0
+        print(f"Processing {len(data)} trajectories")
 
-        # Process each mini-batch in the group
-        for i, (tokens, labels, advantages) in enumerate(
-            zip(token_batches, label_batches, advantage_batches)
-        ):
-            print(f"  Mini-batch {i+1}/{len(token_batches)}: tokens shape {tokens.shape}")
+        # Run forward-backward pass
+        print("Running forward-backward pass...")
+        fwd_bwd_future = await self.training_client.forward_backward_async(
+            data, loss_fn="importance_sampling"
+        )
 
-            # Convert batch to Tinker format
-            from tinker_atropos.training.data_processing import convert_batch_to_tinker_data
-
-            data = convert_batch_to_tinker_data(tokens, labels, advantages)
-            print(f"  Converted to {len(data)} Datum objects")
-
-            # Run forward-backward pass
-            print("  Running forward-backward pass...")
-            fwd_bwd_result = await self.training_client.forward_backward_async(
-                data, loss_fn="grpo"  # Using GRPO loss function
-            )
-            # fwd_bwd_result = await fwd_bwd_future.result_async()
-
-            # Accumulate loss
-            if hasattr(fwd_bwd_result, "loss"):
-                batch_loss = fwd_bwd_result.loss
-                total_loss += batch_loss
-                print(f"  Batch {i+1} loss: {batch_loss:.4f}")
-
+        # 4. Optimizer step
         print("Running optimizer step...")
         adam_params = AdamParams(learning_rate=self.learning_rate)
-        await self.training_client.optim_step_async(adam_params)
+        optim_future = await self.training_client.optim_step_async(adam_params)
         print("Optimizer step complete")
+
+        fwd_bwd_result = await fwd_bwd_future.result_async()
+        optim_result = await optim_future.result_async()
+
+        print(fwd_bwd_result.metrics)
+        print(optim_result)
 
         print("Saving checkpoint...")
         new_path = (
@@ -188,11 +253,8 @@ class TinkerAtroposTrainer:
         step_time = time.time() - step_start
         metrics["step_time"] = step_time
         metrics["learning_rate"] = self.learning_rate
-        metrics["total_loss"] = total_loss
 
-        print(f"\nStep {step} metrics:")
-        for key, value in metrics.items():
-            print(f"  {key}: {value}")
+        return metrics
 
     async def run(self):
         print("\n" + "=" * 60)
@@ -203,7 +265,10 @@ class TinkerAtroposTrainer:
 
         for step in range(self.num_steps):
             try:
-                await self.train_step(step)
+                metrics = await self.train_step(step)
+                print(f"\nStep {step} metrics:")
+                for key, value in metrics.items():
+                    print(f"  {key}: {value}")
             except Exception as e:
                 print(f"Error in step {step}: {e}")
                 import traceback
@@ -217,19 +282,11 @@ class TinkerAtroposTrainer:
 
 
 async def main():
-    training_config = TrainingConfig(
-        model_name="Qwen/Qwen3-4B-Instruct-2507",
-        training_steps=20,
-        use_wandb=True,  # Set to True to enable logging
-        wandb_project="grpo-tinker-trainer-test",  # Replace with your project name
-    )
-
-    # Get configuration from environment or use defaults
     trainer = TinkerAtroposTrainer(
+        base_model="Qwen/Qwen3-4B-Instruct-2507",
         lora_rank=int(os.getenv("LORA_RANK", "32")),
         learning_rate=float(os.getenv("LEARNING_RATE", "2e-5")),
         num_steps=int(os.getenv("NUM_STEPS", "10")),
-        train_config=training_config,
     )
 
     await trainer.run()
