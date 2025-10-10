@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI, HTTPException
 from tinker_atropos.types import (
     CompletionRequest,
@@ -16,6 +18,8 @@ wrapper: TinkerInferenceWrapper | None = None
 current_model_name: str = "unknown"
 
 app = FastAPI(title="Tinker Inference Service")
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 @app.on_event("startup")
@@ -46,17 +50,13 @@ async def completions(request: CompletionRequest):
     if wrapper is None:
         raise HTTPException(status_code=503, detail="Wrapper not initialized")
 
-    if isinstance(request.prompt, str):
-        prompts = [request.prompt]
-    else:
-        prompts = request.prompt
-
     try:
         completions_list = await wrapper.generate(
-            prompts=prompts,
+            prompt=request.prompt,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
             stop=request.stop,
+            num_samples=request.n,
         )
 
         choices = [
