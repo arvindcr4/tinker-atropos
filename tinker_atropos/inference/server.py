@@ -51,7 +51,7 @@ async def completions(request: CompletionRequest):
         raise HTTPException(status_code=503, detail="Wrapper not initialized")
 
     try:
-        completions_list = await wrapper.generate(
+        completions_list, logprobs = await wrapper.generate(
             prompt=request.prompt,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
@@ -64,7 +64,7 @@ async def completions(request: CompletionRequest):
                 "text": completion,
                 "index": i,
                 "finish_reason": "stop",
-                "logprobs": None,
+                "logprobs": logprobs[i],
             }
             for i, completion in enumerate(completions_list)
         ]
@@ -89,7 +89,7 @@ async def chat_completions(request: ChatCompletionRequest):
         messages_dict = [{"role": msg.role, "content": msg.content} for msg in request.messages]
         prompt = wrapper.messages_to_prompt(messages_dict)
 
-        completions_list = await wrapper.generate(
+        completions_list, logprobs = await wrapper.generate(
             prompt=prompt,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
@@ -105,6 +105,7 @@ async def chat_completions(request: ChatCompletionRequest):
                 },
                 "index": i,
                 "finish_reason": "stop",
+                "logprobs": logprobs[i],
             }
             for i, completion in enumerate(completions_list)
         ]

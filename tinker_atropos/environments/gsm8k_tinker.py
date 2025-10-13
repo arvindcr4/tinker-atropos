@@ -240,6 +240,7 @@ class GSM8kEnv(BaseEnv):
                     "messages": messages,
                     "gold_answer": gold_answer,
                     "finish_reason": chat_completion.finish_reason,
+                    "logprobs": chat_completion.logprobs,
                 }
             )
         to_postprocess = await self.score(to_score)
@@ -252,6 +253,7 @@ class GSM8kEnv(BaseEnv):
         scores["tokens"] = list()
         scores["masks"] = list()
         scores["scores"] = list()
+        scores["ref_logprobs"] = list()
         gold_parsed = parse(
             rollout_group_data[0]["gold_answer"],
             extraction_mode="first_match",
@@ -296,6 +298,7 @@ class GSM8kEnv(BaseEnv):
                     continue
                 scores["tokens"].append(tokens)
                 scores["masks"].append(masks)
+                scores["ref_logprobs"].append(item["logprobs"])
                 scores["scores"].append(1.0 if reward else -1.0)
                 if len(scores["tokens"]) >= self.config.group_size:
                     break
