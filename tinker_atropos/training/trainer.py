@@ -13,13 +13,13 @@ import torch
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 WANDB_GROUP = ""
-WANDB_PROJECT = "grpo-tinker-example-test-2"
+WANDB_PROJECT = "grpo-tinker-example-test-3"
 
 
 class TinkerAtroposTrainer:
     def __init__(
         self,
-        base_model: str = "Qwen/Qwen3-4B-Instruct-2507",
+        base_model: str = "meta-llama/Llama-3.1-8B-Instruct",
         lora_rank: int = 32,
         learning_rate: float = 2e-5,
         atropos_api_url: str = "http://localhost:8000",
@@ -117,16 +117,17 @@ class TinkerAtroposTrainer:
         for item in batch:
             scores = np.array(item["scores"])
 
-            # Normalize scores within group (if more than 1)
             if len(scores) > 1:
                 scores = scores - scores.mean()
-                scores = scores / max(scores.std(), 1e-8)
+
+            if len(scores) > 1 and np.all(scores == 0.0):
+                continue
 
             # Handle overrides (set advantage to zero if specified)
             if item.get("overrides") is not None:
                 for i in range(len(item["overrides"])):
                     if item["overrides"][i].get("set_advantage_to_zero", False):
-                        scores[i] = 0
+                        scores[i] = 0.0
 
             # Process each trajectory in the group
             for i in range(len(item["tokens"])):
@@ -134,6 +135,11 @@ class TinkerAtroposTrainer:
                 masks = item["masks"][i]
                 trajectory_logprobs = item["ref_logprobs"][i]
                 advantage = scores[i]
+
+                # Find where generation starts (first token with mask != -100)
+                generation_start_idx = next(
+                    (idx for idx, mask in enumerate(masks) if mask != -100), len(masks)
+                )
 
                 # Pad tokens and masks to token_setup_len
                 padded_tokens = np.concatenate(
@@ -163,13 +169,29 @@ class TinkerAtroposTrainer:
                 input_tokens = padded_tokens[:-1]  # Input to model
                 target_tokens = padded_tokens[1:]  # What model should predict
                 target_masks = padded_masks[1:]  # Which tokens to train on
-                logprobs = padded_logprobs[1:]  # Shifted logprobs to match targets
+                shifted_logprobs = padded_logprobs[1:]  # Shifted logprobs to match targets
 
-                # Create per-token advantages (only for non-masked tokens)
-                advantages = np.where(
-                    target_masks != -100,
-                    advantage,  # Use advantage where mask is valid
-                    0.0,  # Zero advantage for padding
+                logprobs = shifted_logprobs.copy()
+                if generation_start_idx > 0:
+                    logprobs[: generation_start_idx - 1] = 0.0
+
+                advantages = np.zeros_like(logprobs, dtype=np.float32)
+                if generation_start_idx > 0:
+                    # Apply advantage only to generated tokens (after prompt)
+                    advantages[generation_start_idx - 1 :] = np.where(
+                        target_masks[generation_start_idx - 1 :] != -100, advantage, 0.0
+                    )
+                else:
+                    # All tokens are generation
+                    advantages = np.where(target_masks != -100, advantage, 0.0)
+
+                # Verify lengths match
+                assert (
+                    len(input_tokens) == len(target_tokens) == len(logprobs) == len(advantages)
+                ), (
+                    f"Length mismatch: input_tokens={len(input_tokens)}, "
+                    f"target_tokens={len(target_tokens)}, logprobs={len(logprobs)}, "
+                    f"advantages={len(advantages)}"
                 )
 
                 # Create Datum
@@ -291,7 +313,7 @@ class TinkerAtroposTrainer:
 
 async def main():
     trainer = TinkerAtroposTrainer(
-        base_model="Qwen/Qwen3-4B-Instruct-2507",
+        base_model="meta-llama/Llama-3.1-8B-Instruct",
         lora_rank=int(os.getenv("LORA_RANK", "32")),
         learning_rate=float(os.getenv("LEARNING_RATE", "2e-5")),
         num_steps=int(os.getenv("NUM_STEPS", "10")),
