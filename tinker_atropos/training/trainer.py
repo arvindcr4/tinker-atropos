@@ -13,7 +13,7 @@ import torch
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 WANDB_GROUP = ""
-WANDB_PROJECT = "grpo-tinker-example-test"
+WANDB_PROJECT = "grpo-tinker-example-test-2"
 
 
 class TinkerAtroposTrainer:
@@ -132,6 +132,7 @@ class TinkerAtroposTrainer:
             for i in range(len(item["tokens"])):
                 tokens = item["tokens"][i]
                 masks = item["masks"][i]
+                trajectory_logprobs = item["ref_logprobs"][i]
                 advantage = scores[i]
 
                 # Pad tokens and masks to token_setup_len
@@ -149,10 +150,20 @@ class TinkerAtroposTrainer:
                     ]
                 )
 
+                padded_logprobs = np.concatenate(
+                    [
+                        np.array(trajectory_logprobs),
+                        np.zeros(
+                            max(0, token_setup_len - len(trajectory_logprobs)), dtype=np.float32
+                        ),
+                    ]
+                )
+
                 # Shift for autoregressive modeling
                 input_tokens = padded_tokens[:-1]  # Input to model
                 target_tokens = padded_tokens[1:]  # What model should predict
                 target_masks = padded_masks[1:]  # Which tokens to train on
+                logprobs = padded_logprobs[1:]  # Shifted logprobs to match targets
 
                 # Create per-token advantages (only for non-masked tokens)
                 advantages = np.where(
@@ -160,9 +171,6 @@ class TinkerAtroposTrainer:
                     advantage,  # Use advantage where mask is valid
                     0.0,  # Zero advantage for padding
                 )
-
-                # TODO: Logprobs implementation from Atropos / Tinker inference
-                logprobs = np.zeros_like(advantages, dtype=np.float32)
 
                 # Create Datum
                 datum = tinker.Datum(
