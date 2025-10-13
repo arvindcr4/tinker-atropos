@@ -57,7 +57,7 @@ class GSM8kEnv(BaseEnv):
     @classmethod
     def config_init(cls) -> Tuple[BaseEnvConfig, List[APIServerConfig]]:
         env_config = BaseEnvConfig(
-            tokenizer_name="Qwen/Qwen3-4B-Instruct-2507",
+            tokenizer_name="meta-llama/Llama-3.1-8B-Instruct",
             group_size=8,
             use_wandb=True,
             rollout_server_url="http://localhost:8000",
@@ -65,11 +65,13 @@ class GSM8kEnv(BaseEnv):
             batch_size=12,
             steps_per_eval=100,
             max_token_length=2048,
+            max_num_workers=256,
+            max_batches_offpolicy=256,
             wandb_name="gsm8k-tinker-test",
         )
         server_configs = [
             APIServerConfig(
-                model_name="Qwen/Qwen3-4B-Instruct-2507",
+                model_name="meta-llama/Llama-3.1-8B-Instruct",
                 base_url="http://localhost:8001/v1",
                 api_key="x",
                 num_requests_for_eval=256,

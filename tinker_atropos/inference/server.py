@@ -27,7 +27,7 @@ async def startup():
     global wrapper, current_model_name
 
     # TODO: These should come from a top level config
-    base_model = "Qwen/Qwen3-4B-Instruct-2507"
+    base_model = "meta-llama/Llama-3.1-8B-Instruct"
     current_model_name = base_model
 
     print(f"Initializing Tinker inference service with base model: {base_model}")
