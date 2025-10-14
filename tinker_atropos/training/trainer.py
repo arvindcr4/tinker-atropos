@@ -142,7 +142,7 @@ class TinkerAtroposTrainer:
             for i in range(len(item["tokens"])):
                 tokens = item["tokens"][i]
                 masks = item["masks"][i]
-                trajectory_logprobs = item["ref_logprobs"][i]
+                trajectory_logprobs = item["inference_logprobs"][i]
                 advantage = advantages[i]
 
                 generation_start_idx = next(
