@@ -58,11 +58,11 @@ class GSM8kEnv(BaseEnv):
     def config_init(cls) -> Tuple[BaseEnvConfig, List[APIServerConfig]]:
         env_config = BaseEnvConfig(
             tokenizer_name="meta-llama/Llama-3.1-8B-Instruct",
-            group_size=8,
+            group_size=16,
             use_wandb=True,
             rollout_server_url="http://localhost:8000",
             total_steps=1000,
-            batch_size=12,
+            batch_size=128,
             steps_per_eval=100,
             max_token_length=2048,
             max_num_workers=256,
