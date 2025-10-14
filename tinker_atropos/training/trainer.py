@@ -21,7 +21,7 @@ class TinkerAtroposTrainer:
         self,
         base_model: str = "meta-llama/Llama-3.1-8B-Instruct",
         lora_rank: int = 32,
-        learning_rate: float = 2e-5,
+        learning_rate: float = 4e-5,
         atropos_api_url: str = "http://localhost:8000",
         inference_service_url: str = "http://localhost:8001",
         num_steps: int = 100,
@@ -38,6 +38,7 @@ class TinkerAtroposTrainer:
         self.training_client = None
         self.trainer_id = None
         self.batches = []
+        self.group_mean_rewards = []
 
     async def setup(self):
         print("Setting up Tinker trainer...")
@@ -68,7 +69,7 @@ class TinkerAtroposTrainer:
         payload = {
             "wandb_group": WANDB_GROUP,
             "wandb_project": WANDB_PROJECT,
-            "batch_size": 8,
+            "batch_size": 128,
             "max_token_len": 2048,
             "starting_step": 0,
             "checkpoint_dir": "./temp/",
@@ -99,7 +100,9 @@ class TinkerAtroposTrainer:
         data = requests.get("http://localhost:8000/batch", timeout=10).json()
         return data
 
-    def pad_data_to_good_offset(self, data: Dict[str, Any]) -> List[tinker.Datum]:
+    def pad_data_to_good_offset(
+        self, data: Dict[str, Any]
+    ) -> tuple[List[tinker.Datum], List[float]]:
         batch = data["batch"]
 
         max_token_len = max([max([len(x) for x in item["tokens"]]) for item in batch])
@@ -113,35 +116,42 @@ class TinkerAtroposTrainer:
             max_token_len = max_token_len - 1
 
         datums = []
+        group_mean_rewards = []
+        skipped_count = 0
 
         for item in batch:
             scores = np.array(item["scores"])
+            original_mean = scores.mean()
 
+            # GRPO: Subtract group mean only
             if len(scores) > 1:
                 scores = scores - scores.mean()
 
+            # Skip if all advantages are zero
             if len(scores) > 1 and np.all(scores == 0.0):
+                skipped_count += 1
                 continue
 
-            # Handle overrides (set advantage to zero if specified)
+            group_mean_rewards.append(original_mean)
+
+            # Handle overrides
             if item.get("overrides") is not None:
                 for i in range(len(item["overrides"])):
                     if item["overrides"][i].get("set_advantage_to_zero", False):
                         scores[i] = 0.0
 
-            # Process each trajectory in the group
             for i in range(len(item["tokens"])):
                 tokens = item["tokens"][i]
                 masks = item["masks"][i]
-                trajectory_logprobs = item["ref_logprobs"][i]
+                trajectory_logprobs = item["ref_logprobs"][i]  # ONLY generation logprobs!
                 advantage = scores[i]
 
-                # Find where generation starts (first token with mask != -100)
+                # Find where generation starts
                 generation_start_idx = next(
                     (idx for idx, mask in enumerate(masks) if mask != -100), len(masks)
                 )
 
-                # Pad tokens and masks to token_setup_len
+                # Pad tokens and masks
                 padded_tokens = np.concatenate(
                     [
                         np.array(tokens),
@@ -149,43 +159,45 @@ class TinkerAtroposTrainer:
                     ]
                 )
 
-                padded_masks = np.concatenate(
-                    [
-                        np.array(masks),
-                        np.full(max(0, token_setup_len - len(tokens)), -100, dtype=np.int32),
-                    ]
-                )
+                # padded_masks = np.concatenate(
+                #     [
+                #         np.array(masks),
+                #         np.full(max(0, token_setup_len - len(tokens)), -100, dtype=np.int32),
+                #     ]
+                # )
 
+                # Create full logprobs array: zeros for prompt, actual logprobs for generation
+                full_logprobs = np.zeros(len(tokens), dtype=np.float32)
+                # gen_length = len(tokens) - generation_start_idx
+
+                # Place the ref_logprobs starting at generation_start_idx
+                # NOTE: ref_logprobs might be 1 shorter due to autoregressive nature
+                actual_logprobs_to_use = min(
+                    len(trajectory_logprobs), len(tokens) - generation_start_idx - 1
+                )
+                full_logprobs[
+                    generation_start_idx + 1 : generation_start_idx + 1 + actual_logprobs_to_use
+                ] = trajectory_logprobs[:actual_logprobs_to_use]
+
+                # Pad the full logprobs
                 padded_logprobs = np.concatenate(
                     [
-                        np.array(trajectory_logprobs),
-                        np.zeros(
-                            max(0, token_setup_len - len(trajectory_logprobs)), dtype=np.float32
-                        ),
+                        full_logprobs,
+                        np.zeros(max(0, token_setup_len - len(tokens)), dtype=np.float32),
                     ]
                 )
 
                 # Shift for autoregressive modeling
-                input_tokens = padded_tokens[:-1]  # Input to model
-                target_tokens = padded_tokens[1:]  # What model should predict
-                target_masks = padded_masks[1:]  # Which tokens to train on
-                shifted_logprobs = padded_logprobs[1:]  # Shifted logprobs to match targets
+                input_tokens = padded_tokens[:-1]
+                target_tokens = padded_tokens[1:]
+                # target_masks = padded_masks[1:]
+                logprobs = padded_logprobs[1:]
 
-                logprobs = shifted_logprobs.copy()
-                if generation_start_idx > 0:
-                    logprobs[: generation_start_idx - 1] = 0.0
-
+                # Apply advantage only to generated tokens
+                prompt_length_in_shifted = generation_start_idx
                 advantages = np.zeros_like(logprobs, dtype=np.float32)
-                if generation_start_idx > 0:
-                    # Apply advantage only to generated tokens (after prompt)
-                    advantages[generation_start_idx - 1 :] = np.where(
-                        target_masks[generation_start_idx - 1 :] != -100, advantage, 0.0
-                    )
-                else:
-                    # All tokens are generation
-                    advantages = np.where(target_masks != -100, advantage, 0.0)
+                advantages[prompt_length_in_shifted:] = advantage
 
-                # Verify lengths match
                 assert (
                     len(input_tokens) == len(target_tokens) == len(logprobs) == len(advantages)
                 ), (
@@ -194,7 +206,6 @@ class TinkerAtroposTrainer:
                     f"advantages={len(advantages)}"
                 )
 
-                # Create Datum
                 datum = tinker.Datum(
                     model_input=tinker.ModelInput.from_ints(tokens=input_tokens.tolist()),
                     loss_fn_inputs={
@@ -211,27 +222,36 @@ class TinkerAtroposTrainer:
                 )
                 datums.append(datum)
 
-        return datums
+        if skipped_count > 0:
+            print(f"⚠️  Skipped {skipped_count} groups with zero advantages")
 
+        return datums, group_mean_rewards
+
+    # Getting batches should only get 1
     def get_data(self) -> List[tinker.Datum]:
         import time
         import json
 
         all_datums = []
+        all_group_mean_rewards = []
 
         while True:
             data = self.get_batch()
 
             if data.get("batch") is not None:
+                # print(f"Group rewards: {rewards}, mean: {group_mean:.4f}")
+
                 # Save the batch for debugging
                 with open("temp.json", "w", encoding="utf-8") as f:
                     json.dump(data, f)
 
                 # Convert to Datums and accumulate
-                datums = self.pad_data_to_good_offset(data)
+                datums, group_mean = self.pad_data_to_good_offset(data)
                 all_datums.extend(datums)
+                all_group_mean_rewards.extend(group_mean)
             elif len(all_datums) > 0:
                 # Return all accumulated datums
+                self.group_mean_rewards = all_group_mean_rewards
                 return all_datums
             else:
                 # Wait for data
@@ -284,6 +304,11 @@ class TinkerAtroposTrainer:
         metrics["step_time"] = step_time
         metrics["learning_rate"] = self.learning_rate
 
+        if hasattr(self, "group_mean_rewards") and self.group_mean_rewards:
+            metrics["reward/mean"] = np.mean(self.group_mean_rewards)
+            print(f"\n📊 Reward/mean (mean of group means): {metrics['reward/mean']:.4f}")
+            print(f"   Based on {len(self.group_mean_rewards)} groups")
+
         return metrics
 
     async def run(self):
@@ -315,8 +340,8 @@ async def main():
     trainer = TinkerAtroposTrainer(
         base_model="meta-llama/Llama-3.1-8B-Instruct",
         lora_rank=int(os.getenv("LORA_RANK", "32")),
-        learning_rate=float(os.getenv("LEARNING_RATE", "2e-5")),
-        num_steps=int(os.getenv("NUM_STEPS", "10")),
+        learning_rate=float(os.getenv("LEARNING_RATE", "4e-5")),
+        num_steps=10,
     )
 
     await trainer.run()
