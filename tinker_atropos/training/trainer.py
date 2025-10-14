@@ -105,6 +105,7 @@ class TinkerAtroposTrainer:
     ) -> tuple[List[tinker.Datum], List[float]]:
         batch = data["batch"]
 
+        # Find max token length and pad to good multiple
         max_token_len = max([max([len(x) for x in item["tokens"]]) for item in batch])
         good_multiple = 64
 
@@ -123,136 +124,100 @@ class TinkerAtroposTrainer:
             scores = np.array(item["scores"])
             original_mean = scores.mean()
 
-            # GRPO: Subtract group mean only
-            if len(scores) > 1:
-                scores = scores - scores.mean()
+            advantages = scores - original_mean if len(scores) > 1 else scores.copy()
 
             # Skip if all advantages are zero
-            if len(scores) > 1 and np.all(scores == 0.0):
+            if len(scores) > 1 and np.all(advantages == 0.0):
                 skipped_count += 1
                 continue
 
             group_mean_rewards.append(original_mean)
 
-            # Handle overrides
             if item.get("overrides") is not None:
                 for i in range(len(item["overrides"])):
                     if item["overrides"][i].get("set_advantage_to_zero", False):
-                        scores[i] = 0.0
+                        advantages[i] = 0.0
 
+            # Process each trajectory in the group
             for i in range(len(item["tokens"])):
                 tokens = item["tokens"][i]
                 masks = item["masks"][i]
-                trajectory_logprobs = item["ref_logprobs"][i]  # ONLY generation logprobs!
-                advantage = scores[i]
+                trajectory_logprobs = item["ref_logprobs"][i]
+                advantage = advantages[i]
 
-                # Find where generation starts
                 generation_start_idx = next(
                     (idx for idx, mask in enumerate(masks) if mask != -100), len(masks)
                 )
 
-                # Pad tokens and masks
-                padded_tokens = np.concatenate(
-                    [
-                        np.array(tokens),
-                        np.zeros(max(0, token_setup_len - len(tokens)), dtype=np.int32),
-                    ]
-                )
+                # Pad tokens to good multiple first (before shifting)
+                padding_needed = max(0, token_setup_len - len(tokens))
+                if padding_needed > 0:
+                    padded_tokens = tokens + [0] * padding_needed
+                else:
+                    padded_tokens = tokens
 
-                # padded_masks = np.concatenate(
-                #     [
-                #         np.array(masks),
-                #         np.full(max(0, token_setup_len - len(tokens)), -100, dtype=np.int32),
-                #     ]
-                # )
+                ob_len = generation_start_idx
 
-                # Create full logprobs array: zeros for prompt, actual logprobs for generation
-                full_logprobs = np.zeros(len(tokens), dtype=np.float32)
-                # gen_length = len(tokens) - generation_start_idx
-
-                # Place the ref_logprobs starting at generation_start_idx
-                # NOTE: ref_logprobs might be 1 shorter due to autoregressive nature
-                actual_logprobs_to_use = min(
-                    len(trajectory_logprobs), len(tokens) - generation_start_idx - 1
-                )
-                full_logprobs[
-                    generation_start_idx + 1 : generation_start_idx + 1 + actual_logprobs_to_use
-                ] = trajectory_logprobs[:actual_logprobs_to_use]
-
-                # Pad the full logprobs
-                padded_logprobs = np.concatenate(
-                    [
-                        full_logprobs,
-                        np.zeros(max(0, token_setup_len - len(tokens)), dtype=np.float32),
-                    ]
-                )
-
-                # Shift for autoregressive modeling
                 input_tokens = padded_tokens[:-1]
                 target_tokens = padded_tokens[1:]
-                # target_masks = padded_masks[1:]
-                logprobs = padded_logprobs[1:]
 
-                # Apply advantage only to generated tokens
-                prompt_length_in_shifted = generation_start_idx
-                advantages = np.zeros_like(logprobs, dtype=np.float32)
-                advantages[prompt_length_in_shifted:] = advantage
+                all_logprobs = [0.0] * ob_len + trajectory_logprobs
 
+                # Pad logprobs to match input_tokens length
+                if len(all_logprobs) < len(input_tokens):
+                    all_logprobs = all_logprobs + [0.0] * (len(input_tokens) - len(all_logprobs))
+
+                all_advantages = [0.0] * ob_len + [advantage] * (len(input_tokens) - ob_len)
+
+                # Verify all arrays have the same length
                 assert (
-                    len(input_tokens) == len(target_tokens) == len(logprobs) == len(advantages)
+                    len(input_tokens)
+                    == len(target_tokens)
+                    == len(all_logprobs)
+                    == len(all_advantages)
                 ), (
-                    f"Length mismatch: input_tokens={len(input_tokens)}, "
-                    f"target_tokens={len(target_tokens)}, logprobs={len(logprobs)}, "
-                    f"advantages={len(advantages)}"
+                    f"len(input_tokens): {len(input_tokens)}, len(target_tokens): {len(target_tokens)}, "
+                    f"len(all_logprobs): {len(all_logprobs)}, len(all_advantages): {len(all_advantages)}"
                 )
 
+                # Create Datum for Tinker training (matching rl_loop.py structure)
                 datum = tinker.Datum(
-                    model_input=tinker.ModelInput.from_ints(tokens=input_tokens.tolist()),
+                    model_input=tinker.ModelInput.from_ints(tokens=input_tokens),
                     loss_fn_inputs={
                         "target_tokens": tinker.TensorData.from_torch(
                             torch.tensor(target_tokens, dtype=torch.int64)
                         ),
                         "logprobs": tinker.TensorData.from_torch(
-                            torch.tensor(logprobs, dtype=torch.float32)
+                            torch.tensor(all_logprobs, dtype=torch.float32)
                         ),
                         "advantages": tinker.TensorData.from_torch(
-                            torch.tensor(advantages, dtype=torch.float32)
+                            torch.tensor(all_advantages, dtype=torch.float32)
                         ),
                     },
                 )
                 datums.append(datum)
 
         if skipped_count > 0:
-            print(f"⚠️  Skipped {skipped_count} groups with zero advantages")
+            print(f"Skipped {skipped_count} groups with zero advantages")
 
         return datums, group_mean_rewards
 
-    # Getting batches should only get 1
     def get_data(self) -> List[tinker.Datum]:
         import time
         import json
-
-        all_datums = []
-        all_group_mean_rewards = []
 
         while True:
             data = self.get_batch()
 
             if data.get("batch") is not None:
-                # print(f"Group rewards: {rewards}, mean: {group_mean:.4f}")
-
                 # Save the batch for debugging
                 with open("temp.json", "w", encoding="utf-8") as f:
                     json.dump(data, f)
 
-                # Convert to Datums and accumulate
-                datums, group_mean = self.pad_data_to_good_offset(data)
-                all_datums.extend(datums)
-                all_group_mean_rewards.extend(group_mean)
-            elif len(all_datums) > 0:
-                # Return all accumulated datums
-                self.group_mean_rewards = all_group_mean_rewards
-                return all_datums
+                # Convert to Datums and return immediately
+                datums, group_mean_rewards = self.pad_data_to_good_offset(data)
+                self.group_mean_rewards = group_mean_rewards
+                return datums
             else:
                 # Wait for data
                 time.sleep(1)
@@ -265,6 +230,7 @@ class TinkerAtroposTrainer:
         step_start = time.time()
         metrics = {"step": step}
 
+        # Fetch data from Atropos if not already available
         if len(self.batches) == 0:
             print("Fetching data from Atropos...")
             self.batches = self.get_data()
@@ -275,24 +241,23 @@ class TinkerAtroposTrainer:
 
         print(f"Processing {len(data)} trajectories")
 
-        # Run forward-backward pass
         print("Running forward-backward pass...")
         fwd_bwd_future = await self.training_client.forward_backward_async(
             data, loss_fn="importance_sampling"
         )
 
-        # 4. Optimizer step
         print("Running optimizer step...")
-        adam_params = AdamParams(learning_rate=self.learning_rate)
+        adam_params = AdamParams(learning_rate=self.learning_rate, beta1=0.9, beta2=0.95, eps=1e-8)
         optim_future = await self.training_client.optim_step_async(adam_params)
-        print("Optimizer step complete")
 
         fwd_bwd_result = await fwd_bwd_future.result_async()
         optim_result = await optim_future.result_async()
 
-        print(fwd_bwd_result.metrics)
-        print(optim_result)
+        print("Optimizer step complete")
+        print(f"Forward-backward result: {fwd_bwd_result.metrics}")
+        print(f"Optimizer result: {optim_result}")
 
+        # Save checkpoint and update inference service
         print("Saving checkpoint...")
         new_path = (
             self.training_client.save_weights_for_sampler(name=f"step_{step+1}").result().path
@@ -300,13 +265,15 @@ class TinkerAtroposTrainer:
         await self._update_inference_weights(new_path, step=step + 1)
         print(f"Checkpoint saved: {new_path}")
 
+        # Collect metrics
         step_time = time.time() - step_start
         metrics["step_time"] = step_time
         metrics["learning_rate"] = self.learning_rate
 
+        # Log reward metrics (mean of group means)
         if hasattr(self, "group_mean_rewards") and self.group_mean_rewards:
             metrics["reward/mean"] = np.mean(self.group_mean_rewards)
-            print(f"\n📊 Reward/mean (mean of group means): {metrics['reward/mean']:.4f}")
+            print(f"\nReward/mean (mean of group means): {metrics['reward/mean']:.4f}")
             print(f"   Based on {len(self.group_mean_rewards)} groups")
 
         return metrics
