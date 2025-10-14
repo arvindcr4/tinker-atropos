@@ -65,9 +65,9 @@ class GSM8kEnv(BaseEnv):
             batch_size=128,
             steps_per_eval=100,
             max_token_length=2048,
-            max_num_workers=256,
-            max_batches_offpolicy=256,
+            max_num_workers=24,
             wandb_name="gsm8k-tinker-test",
+            ensure_scores_not_the_same=False,
         )
         server_configs = [
             APIServerConfig(
@@ -150,7 +150,6 @@ class GSM8kEnv(BaseEnv):
                         nits=False,
                         malformed_operators=False,
                         basic_latex=True,
-                        equations=True,
                         boxed="all",
                         units=True,
                     ),
@@ -274,7 +273,6 @@ class GSM8kEnv(BaseEnv):
                                 nits=False,
                                 malformed_operators=False,
                                 basic_latex=True,
-                                equations=True,
                                 boxed="all",
                                 units=True,
                             ),
@@ -301,7 +299,7 @@ class GSM8kEnv(BaseEnv):
                 scores["tokens"].append(tokens)
                 scores["masks"].append(masks)
                 scores["ref_logprobs"].append(item["logprobs"])
-                scores["scores"].append(1.0 if reward else -1.0)
+                scores["scores"].append(1.0 if reward else 0.0)
                 if len(scores["tokens"]) >= self.config.group_size:
                     break
             for score in scores["scores"]:
