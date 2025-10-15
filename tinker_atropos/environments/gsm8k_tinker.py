@@ -24,7 +24,7 @@ system_prompt = (
     "tags, and then provide your solution or response to the problem.\n\n"
 )
 
-system_prompt += """You are allocated a maximum of 2048 tokens, please strive to use less.
+system_prompt += """You are allocated a maximum of 256 tokens, please strive to use less.
 
 You will then provide your answer like this: \\boxed{your answer here}
 It is important that you provide your answer in the correct format.
@@ -64,7 +64,7 @@ class GSM8kEnv(BaseEnv):
             total_steps=1000,
             batch_size=128,
             steps_per_eval=100,
-            max_token_length=2048,
+            max_token_length=256,
             max_num_workers=24,
             wandb_name="gsm8k-tinker-test",
             ensure_scores_not_the_same=False,
