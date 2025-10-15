@@ -6,14 +6,17 @@ from typing import Dict, Any, List
 import tinker
 from tinker.types import AdamParams
 
-import math
 import numpy as np
 import torch
+import random
+import string
+
+import wandb
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-WANDB_GROUP = ""
-WANDB_PROJECT = "grpo-tinker-example-test-3"
+# WANDB_GROUP = ""
+# WANDB_PROJECT =
 
 
 class TinkerAtroposTrainer:
@@ -39,6 +42,9 @@ class TinkerAtroposTrainer:
         self.trainer_id = None
         self.batches = []
         self.group_mean_rewards = []
+        self.use_wandb = True
+        self.wandb_project = "grpo-tinker-example-test-3"
+        self.wandb_group = "tinker-shared-group"
 
     async def setup(self):
         print("Setting up Tinker trainer...")
@@ -63,12 +69,34 @@ class TinkerAtroposTrainer:
         self.trainer_id = await self._register_trainer()
         print(f"Registered as trainer: {self.trainer_id}")
 
+        if self.use_wandb:
+            if not self.wandb_project:
+                print("Warning: wandb_project not set, disabling wandb.")
+                self.use_wandb = False
+            else:
+                if not self.wandb_group:
+                    # Set group to random 8 character string
+                    self.wandb_group = "".join(
+                        random.choices(string.ascii_letters + string.digits, k=8)
+                    )
+                try:
+                    wandb.init(
+                        project=self.wandb_project,
+                        group=self.wandb_group,
+                    )
+                    print(
+                        f"Wandb logging enabled. Run: {wandb.run.name} (Project: {self.wandb_project}) "
+                    )
+                except Exception as e:
+                    print(f"Error initializing wandb: {e}. Disabling wandb.")
+                    self.use_wandb = False
+
     async def _register_trainer(self) -> str:
         url = f"{self.atropos_api_url}/register"
 
         payload = {
-            "wandb_group": WANDB_GROUP,
-            "wandb_project": WANDB_PROJECT,
+            "wandb_group": self.wandb_group,
+            "wandb_project": self.wandb_project,
             "batch_size": 128,
             "max_token_len": 2048,
             "starting_step": 0,
@@ -105,17 +133,6 @@ class TinkerAtroposTrainer:
     ) -> tuple[List[tinker.Datum], List[float]]:
         batch = data["batch"]
 
-        # Find max token length and pad to good multiple
-        max_token_len = max([max([len(x) for x in item["tokens"]]) for item in batch])
-        good_multiple = 64
-
-        if (max_token_len - 1) % good_multiple != 0:
-            max_token_len = math.ceil((max_token_len - 1) / good_multiple) * good_multiple
-            token_setup_len = max_token_len + 1
-        else:
-            token_setup_len = max_token_len
-            max_token_len = max_token_len - 1
-
         datums = []
         group_mean_rewards = []
         skipped_count = 0
@@ -141,33 +158,21 @@ class TinkerAtroposTrainer:
             # Process each trajectory in the group
             for i in range(len(item["tokens"])):
                 tokens = item["tokens"][i]
-                masks = item["masks"][i]
+                # masks = item["masks"][i]
                 trajectory_logprobs = item["inference_logprobs"][i]
                 advantage = advantages[i]
 
-                generation_start_idx = next(
-                    (idx for idx, mask in enumerate(masks) if mask != -100), len(masks)
-                )
+                # NO padding on tokens - use them as-is
+                input_tokens = tokens[:-1]
+                target_tokens = tokens[1:]
 
-                # Pad tokens to good multiple first (before shifting)
-                padding_needed = max(0, token_setup_len - len(tokens))
-                if padding_needed > 0:
-                    padded_tokens = tokens + [0] * padding_needed
-                else:
-                    padded_tokens = tokens
+                # Dynamically calculate ob_len based on what we have
+                # This ensures the arrays always match regardless of trajectory_logprobs length
+                ob_len = len(input_tokens) - len(trajectory_logprobs)
 
-                ob_len = generation_start_idx
-
-                input_tokens = padded_tokens[:-1]
-                target_tokens = padded_tokens[1:]
-
+                # Pad logprobs and advantages at the beginning (for observation tokens)
                 all_logprobs = [0.0] * ob_len + trajectory_logprobs
-
-                # Pad logprobs to match input_tokens length
-                if len(all_logprobs) < len(input_tokens):
-                    all_logprobs = all_logprobs + [0.0] * (len(input_tokens) - len(all_logprobs))
-
-                all_advantages = [0.0] * ob_len + [advantage] * (len(input_tokens) - ob_len)
+                all_advantages = [0.0] * ob_len + [advantage] * len(trajectory_logprobs)
 
                 # Verify all arrays have the same length
                 assert (
@@ -276,6 +281,16 @@ class TinkerAtroposTrainer:
             print(f"\nReward/mean (mean of group means): {metrics['reward/mean']:.4f}")
             print(f"   Based on {len(self.group_mean_rewards)} groups")
 
+        if self.use_wandb:
+            wandb.log(
+                {
+                    "train/loss": fwd_bwd_result.metrics["loss:sum"],
+                    "train/learning_rate": self.learning_rate,
+                    "reward/mean": metrics["reward/mean"],
+                },
+                step=step + 1,
+            )
+
         return metrics
 
     async def run(self):
@@ -308,7 +323,7 @@ async def main():
         base_model="meta-llama/Llama-3.1-8B-Instruct",
         lora_rank=int(os.getenv("LORA_RANK", "32")),
         learning_rate=float(os.getenv("LEARNING_RATE", "4e-5")),
-        num_steps=10,
+        num_steps=50,
     )
 
     await trainer.run()
