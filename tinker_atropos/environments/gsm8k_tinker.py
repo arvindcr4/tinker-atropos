@@ -147,15 +147,28 @@ class GSM8kEnv(BaseEnv):
             ) as response:
                 result = await response.json()
 
+<<<<<<< HEAD
+=======
+        # Extract from response
+>>>>>>> 2e4be6c (Updating generate logprobs method return type to match expected atropos changes)
         output_tokens_list = []
         output_logprobs_list = []
         finish_reasons_list = []
 
         for choice in result["choices"]:
+<<<<<<< HEAD
             # Get full tokens
             full_tokens = choice["tokens"]
             logprobs = choice["logprobs"]
 
+=======
+            # Get full tokens (prompt + completion)
+            full_tokens = choice["tokens"]
+            # Get completion logprobs
+            logprobs = choice["logprobs"]
+
+            # Extract just the output tokens (after prompt)
+>>>>>>> 2e4be6c (Updating generate logprobs method return type to match expected atropos changes)
             prefix_len = len(prompt_tokens)
             output_tokens = full_tokens[prefix_len:]
 
@@ -286,8 +299,15 @@ class GSM8kEnv(BaseEnv):
         for i, (output_tokens, logprobs, finish_reason) in enumerate(
             zip(output_tokens_list, output_logprobs_list, finish_reasons_list)
         ):
+<<<<<<< HEAD
             full_tokens = prompt_tokens + output_tokens
 
+=======
+            # Reconstruct full tokens (prompt + output)
+            full_tokens = prompt_tokens + output_tokens
+
+            # Decode the output to get the text
+>>>>>>> 2e4be6c (Updating generate logprobs method return type to match expected atropos changes)
             output_text = self.tokenizer.decode(output_tokens, skip_special_tokens=True)
 
             completion_messages = (
