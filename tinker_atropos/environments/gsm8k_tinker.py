@@ -1,6 +1,7 @@
 import random
 import time
 from typing import Dict, List, Optional, Tuple, TypedDict, Union
+import aiohttp
 
 from datasets import load_dataset
 from latex2sympy2_extended import NormalizationConfig
@@ -14,7 +15,6 @@ from atroposlib.envs.base import (
     ScoredDataGroup,
 )
 from atroposlib.type_definitions import Item
-from atroposlib.utils.tokenize_for_trainer import tokenize_for_trainer
 
 system_prompt = (
     "You are a deep thinking AI, you may use extremely long chains of thought "
@@ -116,6 +116,52 @@ class GSM8kEnv(BaseEnv):
             data = {}
         data["iter"] = self.iter
         super().save_checkpoint(step, data)
+
+    async def _generate_with_logprobs(
+        self,
+        messages: List[Dict[str, str]],
+        n: int = 1,
+        max_tokens: int = 2048,
+        temperature: float = 0.7,
+        stop: Optional[List[str]] = None,
+    ) -> tuple[list, list, list, list]:
+        url = "http://localhost:8001/v1/chat/completions"
+
+        prompt_text = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        prompt_tokens = self.tokenizer.encode(prompt_text, add_special_tokens=True)
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                json={
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "stop": stop if stop else [],
+                    "n": n,
+                },
+            ) as response:
+                result = await response.json()
+
+        output_tokens_list = []
+        output_logprobs_list = []
+        finish_reasons_list = []
+
+        for choice in result["choices"]:
+            # Get full tokens
+            full_tokens = choice["tokens"]
+            logprobs = choice["logprobs"]
+
+            prefix_len = len(prompt_tokens)
+            output_tokens = full_tokens[prefix_len:]
+
+            output_tokens_list.append(output_tokens)
+            output_logprobs_list.append(logprobs)
+            finish_reasons_list.append(choice["finish_reason"])
+
+        return prompt_tokens, output_tokens_list, output_logprobs_list, finish_reasons_list
 
     async def rollout_and_score_eval(self, question: str, answer: str) -> dict:
         """Rollout and score evaluation with detailed sample data collection."""
@@ -222,24 +268,40 @@ class GSM8kEnv(BaseEnv):
         user_message = {"role": "user", "content": item["question"]}
         gold_answer = "\\boxed{" + item["answer"].split("#")[-1].strip().replace(",", "") + "}"
 
-        chat_completions = await self.server.chat_completion(
-            messages=[{"role": "system", "content": system_prompt}, user_message],
+        messages = [{"role": "system", "content": system_prompt}, user_message]
+        (
+            prompt_tokens,
+            output_tokens_list,
+            output_logprobs_list,
+            finish_reasons_list,
+        ) = await self._generate_with_logprobs(
+            messages=messages,
             n=self.config.group_size,
             max_tokens=self.config.max_token_length,
         )
+
         to_score = list()
         to_backlog = list()
-        for i, chat_completion in enumerate(chat_completions.choices):
-            messages = (
+        for i, (output_tokens, logprobs, finish_reason) in enumerate(
+            zip(output_tokens_list, output_logprobs_list, finish_reasons_list)
+        ):
+            full_tokens = prompt_tokens + output_tokens
+
+            output_text = self.tokenizer.decode(output_tokens, skip_special_tokens=True)
+
+            completion_messages = (
                 {"role": "system", "content": system_prompt},
                 user_message,
-                {"role": "assistant", "content": chat_completion.message.content},
+                {"role": "assistant", "content": output_text},
             )
             to_score.append(
                 {
-                    "messages": messages,
+                    "messages": completion_messages,
                     "gold_answer": gold_answer,
-                    "finish_reason": chat_completion.finish_reason,
+                    "finish_reason": finish_reason,
+                    "tokens": full_tokens,
+                    "logprobs": logprobs,
+                    "prompt_tokens": prompt_tokens,
                 }
             )
         to_postprocess = await self.score(to_score)
@@ -283,14 +345,21 @@ class GSM8kEnv(BaseEnv):
                 )
                 # Reward 1 if the content is the same as the ground truth, 0 otherwise
                 reward = verify(answer_parsed, gold_parsed)
-                # print(
-                #     f"message: {item[0][-1]['content']}, ground_truth: {item[1]}, reward: {reward}"
-                # )
-                out_dict = tokenize_for_trainer(
-                    self.tokenizer, item["messages"], item["finish_reason"]
-                )
-                tokens = out_dict["tokens"]
-                masks = out_dict["masks"]
+
+                tokens = item["tokens"]
+                prompt_tokens = item["prompt_tokens"]
+
+                # Create masks
+                prefix_len = len(prompt_tokens)
+                masks = [-100] * prefix_len + tokens[prefix_len:]
+
+                # Handle finish_reason == "length" case
+                if item["finish_reason"] == "length":
+                    if tokens[-1] == self.tokenizer.eos_token_id:
+                        # truncate the last token
+                        tokens = tokens[:-1]
+                        masks = masks[:-1]
+
                 # remove obviously bad examples
                 if len([1 for i in masks if i != -100]) < 10:
                     continue
@@ -301,37 +370,6 @@ class GSM8kEnv(BaseEnv):
                     break
             for score in scores["scores"]:
                 self.percent_correct_buffer.append(max(score, 0))
-            # check if all the same
-            # print(scores['scores'])
-            if all([score == 1 for score in scores["scores"]]):
-                # Do length penalty :)
-                token_lengths = [len(token) for token in scores["tokens"]]
-                if max(token_lengths) == 0:
-                    # What? But don't want to crash a run so just in case...
-                    return None
-
-                # Get max allowed token length from config
-                max_allowed_length = self.config.max_token_length
-                # Set threshold at 50% of max_token_length - no penalty below this
-                length_threshold = max_allowed_length * 0.5
-
-                # Apply modified length penalty with threshold
-                scores["scores"] = []
-                for length in token_lengths:
-                    if length <= length_threshold:
-                        # No penalty for responses under threshold
-                        scores["scores"].append(1.0)
-                    else:
-                        # Calculate how far we are between threshold and max as a percentage
-                        percentage_of_range = (length - length_threshold) / (
-                            max_allowed_length - length_threshold
-                        )
-                        # Cap at 1.0 in case length exceeds max_allowed_length
-                        percentage_of_range = min(percentage_of_range, 1.0)
-                        # Apply linear penalty scaling from 1.0 down to 0.0
-                        scores["scores"].append(1.0 - percentage_of_range)
-            if all([scores["scores"][0] == score for score in scores["scores"]]):
-                return None  # If all the same, we return None
             return scores
         else:
             # If the gold solution is not parseable, we return None
