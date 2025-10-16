@@ -16,20 +16,18 @@ from atroposlib.envs.base import (
 )
 from atroposlib.type_definitions import Item
 
-system_prompt = (
-    "You are a deep thinking AI, you may use extremely long chains of thought "
-    "to deeply consider the problem and deliberate with yourself via systematic "
-    "reasoning processes to help come to a correct solution prior to answering. "
-    "You should enclose your thoughts and internal monologue inside <think> </think> "
-    "tags, and then provide your solution or response to the problem.\n\n"
-)
+question_suffix = " Provide a numerical answer without units, written inside \\boxed{}."
 
-system_prompt += """You are allocated a maximum of 256 tokens, please strive to use less.
-
-You will then provide your answer like this: \\boxed{your answer here}
-It is important that you provide your answer in the correct format.
-If you do not, you will not receive credit for your answer.
-So please end your answer with \\boxed{your answer here}"""
+convo_prefix = [
+    {
+        "role": "user",
+        "content": "How many r's are in strawberry?" + question_suffix,
+    },
+    {
+        "role": "assistant",
+        "content": "Let's spell the word out and number all the letters: 1) s 2) t 3) r 4) a 5) w 6) b 7) e 8) r 9) r 10) y. We have r's at positions 3, 8, and 9. \\boxed{3}",
+    },
+]
 
 
 class GSM8kRow(TypedDict):
@@ -147,28 +145,15 @@ class GSM8kEnv(BaseEnv):
             ) as response:
                 result = await response.json()
 
-<<<<<<< HEAD
-=======
-        # Extract from response
->>>>>>> 2e4be6c (Updating generate logprobs method return type to match expected atropos changes)
         output_tokens_list = []
         output_logprobs_list = []
         finish_reasons_list = []
 
         for choice in result["choices"]:
-<<<<<<< HEAD
             # Get full tokens
             full_tokens = choice["tokens"]
             logprobs = choice["logprobs"]
 
-=======
-            # Get full tokens (prompt + completion)
-            full_tokens = choice["tokens"]
-            # Get completion logprobs
-            logprobs = choice["logprobs"]
-
-            # Extract just the output tokens (after prompt)
->>>>>>> 2e4be6c (Updating generate logprobs method return type to match expected atropos changes)
             prefix_len = len(prompt_tokens)
             output_tokens = full_tokens[prefix_len:]
 
@@ -182,8 +167,8 @@ class GSM8kEnv(BaseEnv):
         """Rollout and score evaluation with detailed sample data collection."""
         completion = await self.server.chat_completion(
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question},
+                *convo_prefix,
+                {"role": "user", "content": question + question_suffix},
             ],
             n=1,
             max_tokens=self.config.max_token_length,
@@ -223,8 +208,8 @@ class GSM8kEnv(BaseEnv):
 
         sample = {
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question},
+                *convo_prefix,
+                {"role": "user", "content": question + question_suffix},
                 {"role": "assistant", "content": response_content},
             ],
             "question": question,
@@ -279,7 +264,7 @@ class GSM8kEnv(BaseEnv):
         )
 
     async def collect_trajectories(self, item: GSM8kRow) -> Tuple[ScoredDataGroup, list[Item]]:
-        user_message = {"role": "user", "content": item["question"]}
+        user_message = {"role": "user", "content": item["question"] + question_suffix}
         gold_answer = "\\boxed{" + item["answer"].split("#")[-1].strip().replace(",", "") + "}"
 
         messages = [{"role": "system", "content": system_prompt}, user_message]
@@ -299,19 +284,12 @@ class GSM8kEnv(BaseEnv):
         for i, (output_tokens, logprobs, finish_reason) in enumerate(
             zip(output_tokens_list, output_logprobs_list, finish_reasons_list)
         ):
-<<<<<<< HEAD
             full_tokens = prompt_tokens + output_tokens
 
-=======
-            # Reconstruct full tokens (prompt + output)
-            full_tokens = prompt_tokens + output_tokens
-
-            # Decode the output to get the text
->>>>>>> 2e4be6c (Updating generate logprobs method return type to match expected atropos changes)
             output_text = self.tokenizer.decode(output_tokens, skip_special_tokens=True)
 
             completion_messages = (
-                {"role": "system", "content": system_prompt},
+                *convo_prefix,
                 user_message,
                 {"role": "assistant", "content": output_text},
             )
