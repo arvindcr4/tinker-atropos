@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from tinker.types import ModelInput, SamplingParams
 from transformers import AutoTokenizer
 
@@ -35,7 +35,7 @@ class TinkerInferenceWrapper:
         temperature: float = 0.7,
         stop: List[str] | None = None,
         num_samples: int = 1,
-    ) -> List[str]:
+    ) -> Tuple[List[str], List[float]]:
         if self.tokenizer is None:
             raise RuntimeError("Tokenizer not initialized. Need to set up tokenizer.")
 
@@ -59,8 +59,9 @@ class TinkerInferenceWrapper:
 
         # Decode all sequences to strings
         completions = [self.tokenizer.decode(sequence.tokens) for sequence in result.sequences]
+        logprobs = [sequence.logprobs for sequence in result.sequences]
 
-        return completions
+        return completions, logprobs
 
     async def update_weights(self, model_path: str) -> None:
         new_client = self.service_client.create_sampling_client(model_path=model_path)

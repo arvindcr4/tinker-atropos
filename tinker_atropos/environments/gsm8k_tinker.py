@@ -1,6 +1,7 @@
 import random
 import time
-from typing import Dict, List, Optional, Tuple, TypedDict, Union
+from typing import Dict, List, Optional, Tuple, TypedDict, Union, Any
+import aiohttp
 
 from datasets import load_dataset
 from latex2sympy2_extended import NormalizationConfig
@@ -14,7 +15,6 @@ from atroposlib.envs.base import (
     ScoredDataGroup,
 )
 from atroposlib.type_definitions import Item
-from atroposlib.utils.tokenize_for_trainer import tokenize_for_trainer
 
 system_prompt = (
     "You are a deep thinking AI, you may use extremely long chains of thought "
@@ -116,6 +116,50 @@ class GSM8kEnv(BaseEnv):
             data = {}
         data["iter"] = self.iter
         super().save_checkpoint(step, data)
+
+    async def _generate_with_logprobs(
+        self,
+        messages: List[Dict[str, str]],
+        n: int = 1,
+        max_tokens: int = 2048,
+        temperature: float = 0.7,
+        stop: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        url = "http://localhost:8001/v1/chat/completions"
+
+        # Calculate prompt tokens before sending request
+        prompt_text = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        prompt_tokens = self.tokenizer.encode(prompt_text, add_special_tokens=True)
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                json={
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "stop": stop if stop else [],
+                    "n": n,
+                },
+            ) as response:
+                result = await response.json()
+
+        # Extract from response
+        completions = []
+        for choice in result["choices"]:
+            completions.append(
+                {
+                    "text": choice["message"]["content"],
+                    "tokens": choice["tokens"],  # Full token IDs (prompt + completion)
+                    "logprobs": choice["logprobs"],  # Logprobs for completion tokens
+                    "prompt_tokens": prompt_tokens,  # Just the prompt tokens
+                    "finish_reason": choice["finish_reason"],
+                }
+            )
+
+        return completions
 
     async def rollout_and_score_eval(self, question: str, answer: str) -> dict:
         """Rollout and score evaluation with detailed sample data collection."""
@@ -222,24 +266,30 @@ class GSM8kEnv(BaseEnv):
         user_message = {"role": "user", "content": item["question"]}
         gold_answer = "\\boxed{" + item["answer"].split("#")[-1].strip().replace(",", "") + "}"
 
-        chat_completions = await self.server.chat_completion(
-            messages=[{"role": "system", "content": system_prompt}, user_message],
+        # Use the new direct API call method instead of self.server
+        messages = [{"role": "system", "content": system_prompt}, user_message]
+        completions = await self._generate_with_logprobs(
+            messages=messages,
             n=self.config.group_size,
             max_tokens=self.config.max_token_length,
         )
+
         to_score = list()
         to_backlog = list()
-        for i, chat_completion in enumerate(chat_completions.choices):
-            messages = (
+        for completion in completions:
+            completion_messages = (
                 {"role": "system", "content": system_prompt},
                 user_message,
-                {"role": "assistant", "content": chat_completion.message.content},
+                {"role": "assistant", "content": completion["text"]},
             )
             to_score.append(
                 {
-                    "messages": messages,
+                    "messages": completion_messages,
                     "gold_answer": gold_answer,
-                    "finish_reason": chat_completion.finish_reason,
+                    "finish_reason": completion["finish_reason"],
+                    "tokens": completion["tokens"],
+                    "logprobs": completion["logprobs"],
+                    "prompt_tokens": completion["prompt_tokens"],
                 }
             )
         to_postprocess = await self.score(to_score)
@@ -283,14 +333,22 @@ class GSM8kEnv(BaseEnv):
                 )
                 # Reward 1 if the content is the same as the ground truth, 0 otherwise
                 reward = verify(answer_parsed, gold_parsed)
-                # print(
-                #     f"message: {item[0][-1]['content']}, ground_truth: {item[1]}, reward: {reward}"
-                # )
-                out_dict = tokenize_for_trainer(
-                    self.tokenizer, item["messages"], item["finish_reason"]
-                )
-                tokens = out_dict["tokens"]
-                masks = out_dict["masks"]
+
+                # Use tokens directly from the API response
+                tokens = item["tokens"]
+                prompt_tokens = item["prompt_tokens"]
+
+                # Create masks: -100 for prompt tokens (not trained), token_id for completion tokens (trained)
+                prefix_len = len(prompt_tokens)
+                masks = [-100] * prefix_len + tokens[prefix_len:]
+
+                # Handle finish_reason == "length" case (same as tokenize_for_trainer)
+                if item["finish_reason"] == "length":
+                    if tokens[-1] == self.tokenizer.eos_token_id:
+                        # truncate the last token
+                        tokens = tokens[:-1]
+                        masks = masks[:-1]
+
                 # remove obviously bad examples
                 if len([1 for i in masks if i != -100]) < 10:
                     continue
