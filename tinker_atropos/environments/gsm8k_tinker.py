@@ -64,6 +64,7 @@ class GSM8kEnv(BaseEnv):
             steps_per_eval=100,
             max_token_length=256,
             max_num_workers=24,
+            max_batches_offpolicy=1,
             wandb_name="gsm8k-tinker-test",
             ensure_scores_not_the_same=False,
         )
@@ -267,7 +268,7 @@ class GSM8kEnv(BaseEnv):
         user_message = {"role": "user", "content": item["question"] + question_suffix}
         gold_answer = "\\boxed{" + item["answer"].split("#")[-1].strip().replace(",", "") + "}"
 
-        messages = [{"role": "system", "content": system_prompt}, user_message]
+        messages = [*convo_prefix, user_message]
         (
             prompt_tokens,
             output_tokens_list,
