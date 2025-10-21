@@ -107,7 +107,7 @@ async def chat_completions(request: ChatCompletionRequest):
                 "index": i,
                 "finish_reason": "stop",
                 "logprobs": logprobs[i],
-                "tokens": wrapper.tokenizer.encode(prompt + completion),
+                "tokens": wrapper.tokenizer.encode(prompt + completion, add_special_tokens=False),
             }
             for i, completion in enumerate(completions_list)
         ]

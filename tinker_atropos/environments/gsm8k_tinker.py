@@ -16,20 +16,18 @@ from atroposlib.envs.base import (
 )
 from atroposlib.type_definitions import Item
 
-system_prompt = (
-    "You are a deep thinking AI, you may use extremely long chains of thought "
-    "to deeply consider the problem and deliberate with yourself via systematic "
-    "reasoning processes to help come to a correct solution prior to answering. "
-    "You should enclose your thoughts and internal monologue inside <think> </think> "
-    "tags, and then provide your solution or response to the problem.\n\n"
-)
+question_suffix = " Provide a numerical answer without units, written inside \\boxed{}."
 
-system_prompt += """You are allocated a maximum of 256 tokens, please strive to use less.
-
-You will then provide your answer like this: \\boxed{your answer here}
-It is important that you provide your answer in the correct format.
-If you do not, you will not receive credit for your answer.
-So please end your answer with \\boxed{your answer here}"""
+convo_prefix = [
+    {
+        "role": "user",
+        "content": "How many r's are in strawberry?" + question_suffix,
+    },
+    {
+        "role": "assistant",
+        "content": "Let's spell the word out and number all the letters: 1) s 2) t 3) r 4) a 5) w 6) b 7) e 8) r 9) r 10) y. We have r's at positions 3, 8, and 9. \\boxed{3}",
+    },
+]
 
 
 class GSM8kRow(TypedDict):
@@ -65,7 +63,8 @@ class GSM8kEnv(BaseEnv):
             batch_size=128,
             steps_per_eval=100,
             max_token_length=256,
-            max_num_workers=24,
+            max_num_workers=8,
+            max_batches_offpolicy=1,
             wandb_name="gsm8k-tinker-test",
             ensure_scores_not_the_same=False,
         )
@@ -132,7 +131,7 @@ class GSM8kEnv(BaseEnv):
         prompt_text = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
-        prompt_tokens = self.tokenizer.encode(prompt_text, add_special_tokens=True)
+        prompt_tokens = self.tokenizer.encode(prompt_text, add_special_tokens=False)
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -169,8 +168,8 @@ class GSM8kEnv(BaseEnv):
         """Rollout and score evaluation with detailed sample data collection."""
         completion = await self.server.chat_completion(
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question},
+                *convo_prefix,
+                {"role": "user", "content": question + question_suffix},
             ],
             n=1,
             max_tokens=self.config.max_token_length,
@@ -210,8 +209,8 @@ class GSM8kEnv(BaseEnv):
 
         sample = {
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question},
+                *convo_prefix,
+                {"role": "user", "content": question + question_suffix},
                 {"role": "assistant", "content": response_content},
             ],
             "question": question,
@@ -266,10 +265,10 @@ class GSM8kEnv(BaseEnv):
         )
 
     async def collect_trajectories(self, item: GSM8kRow) -> Tuple[ScoredDataGroup, list[Item]]:
-        user_message = {"role": "user", "content": item["question"]}
+        user_message = {"role": "user", "content": item["question"] + question_suffix}
         gold_answer = "\\boxed{" + item["answer"].split("#")[-1].strip().replace(",", "") + "}"
 
-        messages = [{"role": "system", "content": system_prompt}, user_message]
+        messages = [*convo_prefix, user_message]
         (
             prompt_tokens,
             output_tokens_list,
@@ -291,7 +290,7 @@ class GSM8kEnv(BaseEnv):
             output_text = self.tokenizer.decode(output_tokens, skip_special_tokens=True)
 
             completion_messages = (
-                {"role": "system", "content": system_prompt},
+                *convo_prefix,
                 user_message,
                 {"role": "assistant", "content": output_text},
             )
@@ -353,13 +352,6 @@ class GSM8kEnv(BaseEnv):
                 # Create masks
                 prefix_len = len(prompt_tokens)
                 masks = [-100] * prefix_len + tokens[prefix_len:]
-
-                # Handle finish_reason == "length" case
-                if item["finish_reason"] == "length":
-                    if tokens[-1] == self.tokenizer.eos_token_id:
-                        # truncate the last token
-                        tokens = tokens[:-1]
-                        masks = masks[:-1]
 
                 # remove obviously bad examples
                 if len([1 for i in masks if i != -100]) < 10:

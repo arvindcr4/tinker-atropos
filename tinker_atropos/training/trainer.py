@@ -137,6 +137,9 @@ class TinkerAtroposTrainer:
         group_mean_rewards = []
         skipped_count = 0
 
+        # Collect all logprobs for statistics
+        all_reference_logprobs = []
+
         for item in batch:
             scores = np.array(item["scores"])
             original_mean = scores.mean()
@@ -162,17 +165,17 @@ class TinkerAtroposTrainer:
                 trajectory_logprobs = item["inference_logprobs"][i]
                 advantage = advantages[i]
 
-                # NO padding on tokens - use them as-is
                 input_tokens = tokens[:-1]
                 target_tokens = tokens[1:]
 
                 # Dynamically calculate ob_len based on what we have
-                # This ensures the arrays always match regardless of trajectory_logprobs length
                 ob_len = len(input_tokens) - len(trajectory_logprobs)
 
                 # Pad logprobs and advantages at the beginning (for observation tokens)
                 all_logprobs = [0.0] * ob_len + trajectory_logprobs
                 all_advantages = [0.0] * ob_len + [advantage] * len(trajectory_logprobs)
+
+                all_reference_logprobs.extend(all_logprobs)
 
                 # Verify all arrays have the same length
                 assert (
@@ -185,7 +188,6 @@ class TinkerAtroposTrainer:
                     f"len(all_logprobs): {len(all_logprobs)}, len(all_advantages): {len(all_advantages)}"
                 )
 
-                # Create Datum for Tinker training (matching rl_loop.py structure)
                 datum = tinker.Datum(
                     model_input=tinker.ModelInput.from_ints(tokens=input_tokens),
                     loss_fn_inputs={
@@ -204,6 +206,21 @@ class TinkerAtroposTrainer:
 
         if skipped_count > 0:
             print(f"Skipped {skipped_count} groups with zero advantages")
+
+        # Calculate logprob statistics
+        if all_reference_logprobs:
+            logprob_array = np.array(all_reference_logprobs)
+            self.logprob_stats = {
+                "logprobs/mean": float(np.mean(logprob_array)),
+                "logprobs/std": float(np.std(logprob_array)),
+                "logprobs/min": float(np.min(logprob_array)),
+                "logprobs/max": float(np.max(logprob_array)),
+                "logprobs/p10": float(np.percentile(logprob_array, 10)),
+                "logprobs/p50": float(np.percentile(logprob_array, 50)),
+                "logprobs/p90": float(np.percentile(logprob_array, 90)),
+            }
+        else:
+            self.logprob_stats = {}
 
         return datums, group_mean_rewards
 
@@ -262,6 +279,39 @@ class TinkerAtroposTrainer:
         print(f"Forward-backward result: {fwd_bwd_result.metrics}")
         print(f"Optimizer result: {optim_result}")
 
+        # Extract training logprobs from forward-backward result
+        training_logprobs_all = []
+        for datum, output in zip(data, fwd_bwd_result.loss_fn_outputs):
+            training_logprobs = output["logprobs"].to_torch()
+            # Get the advantages to find where the generated tokens are (non-zero)
+            advantages = datum.loss_fn_inputs["advantages"].to_torch()
+            # Only keep training logprobs where advantages are non-zero (same mask as inference)
+            mask = advantages != 0.0
+            training_lp_masked = training_logprobs[mask]
+            training_logprobs_all.extend(training_lp_masked.cpu().numpy().tolist())
+
+        # Calculate training logprob statistics (will be plotted with inference logprobs)
+        if training_logprobs_all:
+            training_lp_array = np.array(training_logprobs_all)
+            self.training_logprob_stats = {
+                "logprobs/mean_training": float(np.mean(training_lp_array)),
+                "logprobs/std_training": float(np.std(training_lp_array)),
+                "logprobs/min_training": float(np.min(training_lp_array)),
+                "logprobs/max_training": float(np.max(training_lp_array)),
+                "logprobs/p10_training": float(np.percentile(training_lp_array, 10)),
+                "logprobs/p50_training": float(np.percentile(training_lp_array, 50)),
+                "logprobs/p90_training": float(np.percentile(training_lp_array, 90)),
+            }
+
+            # Calculate difference if we have inference logprobs
+            if hasattr(self, "logprob_stats") and "logprobs/mean" in self.logprob_stats:
+                # Get the reference logprobs from the earlier collection
+                ref_mean = self.logprob_stats["logprobs/mean"]
+                train_mean = float(np.mean(training_lp_array))
+                self.training_logprob_stats["logprobs/diff"] = ref_mean - train_mean
+        else:
+            self.training_logprob_stats = {}
+
         # Save checkpoint and update inference service
         print("Saving checkpoint...")
         new_path = (
@@ -282,14 +332,21 @@ class TinkerAtroposTrainer:
             print(f"   Based on {len(self.group_mean_rewards)} groups")
 
         if self.use_wandb:
-            wandb.log(
-                {
-                    "train/loss": fwd_bwd_result.metrics["loss:sum"],
-                    "train/learning_rate": self.learning_rate,
-                    "reward/mean": metrics["reward/mean"],
-                },
-                step=step + 1,
-            )
+            wandb_metrics = {
+                "train/loss": fwd_bwd_result.metrics["loss:sum"],
+                "train/learning_rate": self.learning_rate,
+                "reward/mean": metrics["reward/mean"],
+            }
+
+            # Add inference logprob statistics
+            if hasattr(self, "logprob_stats"):
+                wandb_metrics.update(self.logprob_stats)
+
+            # Add training logprob statistics (will be on same plots as inference)
+            if hasattr(self, "training_logprob_stats"):
+                wandb_metrics.update(self.training_logprob_stats)
+
+            wandb.log(wandb_metrics, step=step + 1)
 
         return metrics
 
