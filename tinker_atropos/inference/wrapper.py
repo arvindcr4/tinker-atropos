@@ -32,7 +32,7 @@ class TinkerInferenceWrapper:
         self,
         prompt: str,
         max_tokens: int = 100,
-        temperature: float = 0.7,
+        temperature: float = 1.0,
         stop: List[str] | None = None,
         num_samples: int = 1,
     ) -> Tuple[List[str], List[float]]:

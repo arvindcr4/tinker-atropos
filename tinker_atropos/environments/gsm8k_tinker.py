@@ -51,6 +51,7 @@ class GSM8kEnv(BaseEnv):
         # Add tracking for wandb visualizations
         self.rollouts_for_wandb = []
         self.completion_lengths = []
+        self.wandb_group = "tinker_logging_group"
 
     @classmethod
     def config_init(cls) -> Tuple[BaseEnvConfig, List[APIServerConfig]]:
@@ -63,9 +64,9 @@ class GSM8kEnv(BaseEnv):
             batch_size=128,
             steps_per_eval=100,
             max_token_length=256,
-            max_num_workers=8,
-            max_batches_offpolicy=1,
-            wandb_name="gsm8k-tinker-test",
+            max_num_workers=24,
+            max_batches_offpolicy=3,
+            wandb_name="atropos-tinker",
             ensure_scores_not_the_same=False,
         )
         server_configs = [
@@ -123,7 +124,7 @@ class GSM8kEnv(BaseEnv):
         messages: List[Dict[str, str]],
         n: int = 1,
         max_tokens: int = 2048,
-        temperature: float = 0.7,
+        temperature: float = 1.0,
         stop: Optional[List[str]] = None,
     ) -> tuple[list, list, list, list]:
         url = "http://localhost:8001/v1/chat/completions"

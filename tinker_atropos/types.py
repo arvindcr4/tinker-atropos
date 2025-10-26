@@ -6,7 +6,7 @@ from pydantic import BaseModel
 class CompletionRequest(BaseModel):
     prompt: str | List[str]
     max_tokens: int = 100
-    temperature: float = 0.7
+    temperature: float = 1.0
     stop: List[str] | None = None
     n: int = 1
 
@@ -34,7 +34,7 @@ class ChatMessage(BaseModel):
 class ChatCompletionRequest(BaseModel):
     messages: List[ChatMessage]
     max_tokens: int = 100
-    temperature: float = 0.7
+    temperature: float = 1.0
     stop: List[str] | None = None
     n: int = 1
 
