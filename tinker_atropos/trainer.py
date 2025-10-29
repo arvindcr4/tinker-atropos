@@ -48,7 +48,7 @@ class TinkerAtroposTrainer:
         self.wandb_group = "tinker_logging_group"  # "".join(random.choices(string.ascii_letters + string.digits, k=8))
 
     async def setup(self):
-        print("Setting up Unified Tinker-Atropos Trainer...")
+        print("Setting up Tinker-Atropos Trainer...")
 
         print(f"Creating ServiceClient for {self.base_model}...")
         self.service_client = tinker.ServiceClient()
@@ -350,7 +350,7 @@ class TinkerAtroposTrainer:
 
     async def run(self):
         print("\n" + "=" * 60)
-        print("Starting Unified Tinker-Atropos Training")
+        print("Starting Tinker-Atropos Training")
         print("=" * 60 + "\n")
 
         await self.setup()
