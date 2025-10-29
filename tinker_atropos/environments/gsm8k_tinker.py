@@ -14,6 +14,7 @@ from atroposlib.envs.base import (
     ScoredDataGroup,
 )
 from atroposlib.type_definitions import Item
+from tinker_atropos.config import get_config
 
 question_suffix = " Provide a numerical answer without units, written inside \\boxed{}."
 
@@ -50,31 +51,32 @@ class GSM8kEnv(BaseEnv):
         # Add tracking for wandb visualizations
         self.rollouts_for_wandb = []
         self.completion_lengths = []
-        self.wandb_group = "tinker_logging_group"
 
     @classmethod
     def config_init(cls) -> Tuple[BaseEnvConfig, List[APIServerConfig]]:
+        config = get_config()
+
         env_config = BaseEnvConfig(
-            tokenizer_name="meta-llama/Llama-3.1-8B-Instruct",
-            group_size=16,
-            use_wandb=True,
-            rollout_server_url="http://localhost:8000",
-            total_steps=1000,
-            batch_size=128,
-            steps_per_eval=100,
-            max_token_length=256,
-            max_num_workers=24,
-            max_batches_offpolicy=3,
-            wandb_name="atropos-tinker",
-            ensure_scores_not_the_same=False,
+            tokenizer_name=config.base_model,
+            group_size=config.group_size,
+            use_wandb=config.use_wandb,
+            rollout_server_url=config.atropos_api_url,
+            total_steps=config.num_steps,
+            batch_size=config.batch_size,
+            steps_per_eval=config.steps_per_eval,
+            max_token_length=config.max_token_env_length,
+            max_num_workers=config.max_num_workers,
+            max_batches_offpolicy=config.max_batches_offpolicy,
+            wandb_name=f"{config.wandb_run_name}-env",  # Env run name
+            ensure_scores_not_the_same=config.ensure_scores_not_the_same,
         )
         server_configs = [
             APIServerConfig(
-                model_name="meta-llama/Llama-3.1-8B-Instruct",
-                base_url="http://localhost:8001/v1",
+                model_name=config.base_model,
+                base_url=config.inference_api_url + "/v1",
                 api_key="x",
-                num_requests_for_eval=256,
                 server_type="sglang",
+                num_requests_for_eval=config.num_requests_for_eval,
             ),
         ]
 
