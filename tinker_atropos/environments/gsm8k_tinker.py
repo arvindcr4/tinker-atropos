@@ -16,20 +16,18 @@ from atroposlib.envs.base import (
 )
 from atroposlib.type_definitions import Item
 
-system_prompt = (
-    "You are a deep thinking AI, you may use extremely long chains of thought "
-    "to deeply consider the problem and deliberate with yourself via systematic "
-    "reasoning processes to help come to a correct solution prior to answering. "
-    "You should enclose your thoughts and internal monologue inside <think> </think> "
-    "tags, and then provide your solution or response to the problem.\n\n"
-)
+question_suffix = " Provide a numerical answer without units, written inside \\boxed{}."
 
-system_prompt += """You are allocated a maximum of 2048 tokens, please strive to use less.
-
-You will then provide your answer like this: \\boxed{your answer here}
-It is important that you provide your answer in the correct format.
-If you do not, you will not receive credit for your answer.
-So please end your answer with \\boxed{your answer here}"""
+convo_prefix = [
+    {
+        "role": "user",
+        "content": "How many r's are in strawberry?" + question_suffix,
+    },
+    {
+        "role": "assistant",
+        "content": "Let's spell the word out and number all the letters: 1) s 2) t 3) r 4) a 5) w 6) b 7) e 8) r 9) r 10) y. We have r's at positions 3, 8, and 9. \\boxed{3}",
+    },
+]
 
 
 class GSM8kRow(TypedDict):
@@ -53,23 +51,27 @@ class GSM8kEnv(BaseEnv):
         # Add tracking for wandb visualizations
         self.rollouts_for_wandb = []
         self.completion_lengths = []
+        self.wandb_group = "tinker_logging_group"
 
     @classmethod
     def config_init(cls) -> Tuple[BaseEnvConfig, List[APIServerConfig]]:
         env_config = BaseEnvConfig(
-            tokenizer_name="Qwen/Qwen3-4B-Instruct-2507",
-            group_size=8,
+            tokenizer_name="meta-llama/Llama-3.1-8B-Instruct",
+            group_size=16,
             use_wandb=True,
             rollout_server_url="http://localhost:8000",
             total_steps=1000,
-            batch_size=12,
+            batch_size=128,
             steps_per_eval=100,
-            max_token_length=2048,
-            wandb_name="gsm8k-tinker-test",
+            max_token_length=256,
+            max_num_workers=24,
+            max_batches_offpolicy=3,
+            wandb_name="atropos-tinker",
+            ensure_scores_not_the_same=False,
         )
         server_configs = [
             APIServerConfig(
-                model_name="Qwen/Qwen3-4B-Instruct-2507",
+                model_name="meta-llama/Llama-3.1-8B-Instruct",
                 base_url="http://localhost:8001/v1",
                 api_key="x",
                 num_requests_for_eval=256,
@@ -122,7 +124,7 @@ class GSM8kEnv(BaseEnv):
         messages: List[Dict[str, str]],
         n: int = 1,
         max_tokens: int = 2048,
-        temperature: float = 0.7,
+        temperature: float = 1.0,
         stop: Optional[List[str]] = None,
     ) -> tuple[list, list, list, list]:
         url = "http://localhost:8001/v1/chat/completions"
@@ -130,7 +132,7 @@ class GSM8kEnv(BaseEnv):
         prompt_text = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
-        prompt_tokens = self.tokenizer.encode(prompt_text, add_special_tokens=True)
+        prompt_tokens = self.tokenizer.encode(prompt_text, add_special_tokens=False)
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -167,8 +169,8 @@ class GSM8kEnv(BaseEnv):
         """Rollout and score evaluation with detailed sample data collection."""
         completion = await self.server.chat_completion(
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question},
+                *convo_prefix,
+                {"role": "user", "content": question + question_suffix},
             ],
             n=1,
             max_tokens=self.config.max_token_length,
@@ -194,7 +196,6 @@ class GSM8kEnv(BaseEnv):
                         nits=False,
                         malformed_operators=False,
                         basic_latex=True,
-                        equations=True,
                         boxed="all",
                         units=True,
                     ),
@@ -209,8 +210,8 @@ class GSM8kEnv(BaseEnv):
 
         sample = {
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question},
+                *convo_prefix,
+                {"role": "user", "content": question + question_suffix},
                 {"role": "assistant", "content": response_content},
             ],
             "question": question,
@@ -265,10 +266,10 @@ class GSM8kEnv(BaseEnv):
         )
 
     async def collect_trajectories(self, item: GSM8kRow) -> Tuple[ScoredDataGroup, list[Item]]:
-        user_message = {"role": "user", "content": item["question"]}
+        user_message = {"role": "user", "content": item["question"] + question_suffix}
         gold_answer = "\\boxed{" + item["answer"].split("#")[-1].strip().replace(",", "") + "}"
 
-        messages = [{"role": "system", "content": system_prompt}, user_message]
+        messages = [*convo_prefix, user_message]
         (
             prompt_tokens,
             output_tokens_list,
@@ -290,7 +291,7 @@ class GSM8kEnv(BaseEnv):
             output_text = self.tokenizer.decode(output_tokens, skip_special_tokens=True)
 
             completion_messages = (
-                {"role": "system", "content": system_prompt},
+                *convo_prefix,
                 user_message,
                 {"role": "assistant", "content": output_text},
             )
@@ -314,6 +315,7 @@ class GSM8kEnv(BaseEnv):
         scores["tokens"] = list()
         scores["masks"] = list()
         scores["scores"] = list()
+        scores["inference_logprobs"] = list()
         gold_parsed = parse(
             rollout_group_data[0]["gold_answer"],
             extraction_mode="first_match",
@@ -332,7 +334,6 @@ class GSM8kEnv(BaseEnv):
                                 nits=False,
                                 malformed_operators=False,
                                 basic_latex=True,
-                                equations=True,
                                 boxed="all",
                                 units=True,
                             ),
@@ -353,19 +354,13 @@ class GSM8kEnv(BaseEnv):
                 prefix_len = len(prompt_tokens)
                 masks = [-100] * prefix_len + tokens[prefix_len:]
 
-                # Handle finish_reason == "length" case
-                if item["finish_reason"] == "length":
-                    if tokens[-1] == self.tokenizer.eos_token_id:
-                        # truncate the last token
-                        tokens = tokens[:-1]
-                        masks = masks[:-1]
-
                 # remove obviously bad examples
                 if len([1 for i in masks if i != -100]) < 10:
                     continue
                 scores["tokens"].append(tokens)
                 scores["masks"].append(masks)
-                scores["scores"].append(1.0 if reward else -1.0)
+                scores["inference_logprobs"].append(item["logprobs"])
+                scores["scores"].append(1.0 if reward else 0.0)
                 if len(scores["tokens"]) >= self.config.group_size:
                     break
             for score in scores["scores"]:
