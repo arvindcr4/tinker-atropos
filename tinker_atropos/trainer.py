@@ -188,10 +188,11 @@ class TinkerAtroposTrainer:
                 input_tokens = tokens[:-1]
                 target_tokens = tokens[1:]
 
-                # Shift logprobs to align with targets (tokens[1:])
-                # logprobs[i] corresponds to the probability of tokens[i]
-                # We want logprobs for target_tokens = tokens[1:], so use trajectory_logprobs[1:]
-                all_logprobs = trajectory_logprobs[:-1]  # Remove last logprob to match input length
+                # Shift logprobs to align with target tokens
+                # trajectory_logprobs[i] = logprob of generating tokens[i] given tokens[:i]
+                # For target_tokens = tokens[1:], we need trajectory_logprobs[1:]
+                # This aligns: target[i] gets the logprob from trajectory_logprobs[i+1]
+                all_logprobs = trajectory_logprobs[1:]  # Shift right to align with targets
 
                 # Advantages: use same advantage for all generated tokens, 0.0 for prompt tokens
                 # trajectory_logprobs has 1.0 for prompt tokens, actual values for generated tokens
@@ -224,13 +225,14 @@ class TinkerAtroposTrainer:
 
         if all_reference_logprobs:
             logprob_array = np.array(all_reference_logprobs)
-            logprob_array_nonzero = logprob_array[logprob_array != 0.0]
-            if len(logprob_array_nonzero) > 0:
+            # Filter out both 0.0 and 1.0 (1.0 are placeholder values for prompt tokens)
+            logprob_array_actual = logprob_array[(logprob_array != 0.0) & (logprob_array != 1.0)]
+            if len(logprob_array_actual) > 0:
                 self.logprob_stats = {
-                    "logprobs/mean": float(np.mean(logprob_array_nonzero)),
-                    "logprobs/std": float(np.std(logprob_array_nonzero)),
-                    "logprobs/min": float(np.min(logprob_array_nonzero)),
-                    "logprobs/p50": float(np.percentile(logprob_array_nonzero, 50)),
+                    "logprobs/mean": float(np.mean(logprob_array_actual)),
+                    "logprobs/std": float(np.std(logprob_array_actual)),
+                    "logprobs/min": float(np.min(logprob_array_actual)),
+                    "logprobs/p50": float(np.percentile(logprob_array_actual, 50)),
                 }
             else:
                 self.logprob_stats = {}
@@ -531,7 +533,7 @@ async def generate(request: GenerateRequest):
         sampling_params = request.sampling_params or {}
         n = sampling_params.get("n", 1)
         max_tokens = sampling_params.get("max_new_tokens", 256)
-        temperature = sampling_params.get("temperature", 0.7)
+        temperature = sampling_params.get("temperature", 1.0)
         stop = sampling_params.get("stop", [])
 
         # Generate using Tinker sampling client
