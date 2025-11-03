@@ -107,43 +107,6 @@ class TinkerAtroposTrainer:
         result = response.json()
         return result.get("uuid")
 
-    async def generate_with_logprobs(
-        self,
-        messages: List[Dict[str, str]],
-        n: int = 1,
-        max_tokens: int = 256,
-        temperature: float = 0.7,
-        stop: List[str] = None,
-    ) -> tuple[list, list, list, list]:
-        prompt_text = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-        prompt_tokens = self.tokenizer.encode(prompt_text, add_special_tokens=False)
-        model_input = ModelInput.from_ints(prompt_tokens)
-
-        sampling_params = SamplingParams(
-            max_tokens=max_tokens,
-            temperature=temperature,
-            stop=stop if stop else [],
-        )
-
-        result = await self.current_sampling_client.sample_async(
-            prompt=model_input,
-            sampling_params=sampling_params,
-            num_samples=n,
-        )
-
-        output_tokens_list = []
-        output_logprobs_list = []
-        finish_reasons_list = []
-
-        for sequence in result.sequences:
-            output_tokens_list.append(sequence.tokens)
-            output_logprobs_list.append(sequence.logprobs if sequence.logprobs else [])
-            finish_reasons_list.append("stop")  # TODO: get actual finish reason
-
-        return prompt_tokens, output_tokens_list, output_logprobs_list, finish_reasons_list
-
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15))
     def get_batch(self):
         data = requests.get(f"{self.atropos_api_url}/batch", timeout=10).json()
@@ -183,19 +146,11 @@ class TinkerAtroposTrainer:
 
                 all_advantages.append(advantage)
 
-                # ManagedServer provides full aligned logprobs (already masked with 1.0 for prompt)
-                # For next-token prediction: input is tokens[:-1], target is tokens[1:]
                 input_tokens = tokens[:-1]
                 target_tokens = tokens[1:]
 
-                # Shift logprobs to align with target tokens
-                # trajectory_logprobs[i] = logprob of generating tokens[i] given tokens[:i]
-                # For target_tokens = tokens[1:], we need trajectory_logprobs[1:]
-                # This aligns: target[i] gets the logprob from trajectory_logprobs[i+1]
                 all_logprobs = trajectory_logprobs[1:]  # Shift right to align with targets
 
-                # Advantages: use same advantage for all generated tokens, 0.0 for prompt tokens
-                # trajectory_logprobs has 1.0 for prompt tokens, actual values for generated tokens
                 all_advantages_padded = [0.0 if lp == 1.0 else advantage for lp in all_logprobs]
 
                 all_reference_logprobs.extend(all_logprobs)
@@ -550,17 +505,12 @@ async def generate(request: GenerateRequest):
             num_samples=n,
         )
 
-        # Process results - format for SGLang compatibility
-        # SGLang wrapper expects: if not isinstance(results, list): results = [results]
-        # So for n=1, return single dict. For n>1, return list of dicts.
-
         if n == 1:
             sequence = result.sequences[0]
             output_tokens = sequence.tokens
             output_logprobs = sequence.logprobs if sequence.logprobs else []
             output_text = trainer.tokenizer.decode(output_tokens, skip_special_tokens=True)
 
-            # Format logprobs as SGLang expects: [(logprob, token_id, text), ...]
             output_token_logprobs = []
             for token_id, logprob in zip(output_tokens, output_logprobs):
                 token_text = trainer.tokenizer.decode([token_id])

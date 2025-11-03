@@ -71,10 +71,10 @@ class GSM8kEnv(BaseEnv):
         server_configs = [
             APIServerConfig(
                 model_name="meta-llama/Llama-3.1-8B-Instruct",
-                base_url="http://localhost:8001/v1",  # OpenAI client needs /v1 prefix
+                base_url="http://localhost:8001/v1",
                 api_key="x",
                 num_requests_for_eval=256,
-                server_type="sglang",  # Use SGLang server type for ManagedServer compatibility
+                server_type="sglang",
             ),
         ]
 
@@ -220,17 +220,11 @@ class GSM8kEnv(BaseEnv):
         )
 
     async def collect_trajectories(self, item: GSM8kRow) -> Tuple[ScoredDataGroup, list[Item]]:
-        """
-        Generate multiple rollouts for a single question using ManagedServer.
-        ManagedServer automatically tracks tokens, masks, and logprobs.
-        """
         user_message = {"role": "user", "content": item["question"] + question_suffix}
         gold_answer = "\\boxed{" + item["answer"].split("#")[-1].strip().replace(",", "") + "}"
 
-        # Prepare messages for chat completion
         messages = [*convo_prefix, user_message]
 
-        # Use ManagedServer for automatic token/logprob tracking
         async with self.server.managed_server(tokenizer=self.tokenizer) as managed:
             chat_completion = await managed.chat_completion(
                 messages=messages,
@@ -239,11 +233,9 @@ class GSM8kEnv(BaseEnv):
                 temperature=1.0,
             )
 
-            # Get tracked sequences with pre-aligned tokens and logprobs
             state = managed.get_state()
             nodes = state["nodes"]
 
-        # Extract data from SequenceNodes for scoring
         to_score = list()
         to_backlog = list()
         for choice, node in zip(chat_completion.choices, nodes):
@@ -257,9 +249,9 @@ class GSM8kEnv(BaseEnv):
                     "messages": completion_messages,
                     "gold_answer": gold_answer,
                     "finish_reason": choice.finish_reason,
-                    "tokens": node.tokens,  # Full unmasked tokens
-                    "masked_tokens": node.masked_tokens,  # Pre-masked tokens (-100 for prompt)
-                    "logprobs": node.logprobs,  # Pre-masked logprobs (1.0 for prompt)
+                    "tokens": node.tokens,
+                    "masked_tokens": node.masked_tokens,
+                    "logprobs": node.logprobs,
                 }
             )
         to_postprocess = await self.score(to_score)
