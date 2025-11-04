@@ -1,7 +1,6 @@
 import random
 import time
 from typing import Dict, List, Optional, Tuple, TypedDict, Union
-import aiohttp
 
 from datasets import load_dataset
 from latex2sympy2_extended import NormalizationConfig
@@ -75,6 +74,7 @@ class GSM8kEnv(BaseEnv):
                 base_url="http://localhost:8001/v1",
                 api_key="x",
                 num_requests_for_eval=256,
+                server_type="sglang",
             ),
         ]
 
@@ -118,52 +118,6 @@ class GSM8kEnv(BaseEnv):
             data = {}
         data["iter"] = self.iter
         super().save_checkpoint(step, data)
-
-    async def _generate_with_logprobs(
-        self,
-        messages: List[Dict[str, str]],
-        n: int = 1,
-        max_tokens: int = 2048,
-        temperature: float = 1.0,
-        stop: Optional[List[str]] = None,
-    ) -> tuple[list, list, list, list]:
-        url = "http://localhost:8001/v1/chat/completions"
-
-        prompt_text = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-        prompt_tokens = self.tokenizer.encode(prompt_text, add_special_tokens=False)
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                json={
-                    "messages": messages,
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                    "stop": stop if stop else [],
-                    "n": n,
-                },
-            ) as response:
-                result = await response.json()
-
-        output_tokens_list = []
-        output_logprobs_list = []
-        finish_reasons_list = []
-
-        for choice in result["choices"]:
-            # Get full tokens
-            full_tokens = choice["tokens"]
-            logprobs = choice["logprobs"]
-
-            prefix_len = len(prompt_tokens)
-            output_tokens = full_tokens[prefix_len:]
-
-            output_tokens_list.append(output_tokens)
-            output_logprobs_list.append(logprobs)
-            finish_reasons_list.append(choice["finish_reason"])
-
-        return prompt_tokens, output_tokens_list, output_logprobs_list, finish_reasons_list
 
     async def rollout_and_score_eval(self, question: str, answer: str) -> dict:
         """Rollout and score evaluation with detailed sample data collection."""
@@ -270,39 +224,34 @@ class GSM8kEnv(BaseEnv):
         gold_answer = "\\boxed{" + item["answer"].split("#")[-1].strip().replace(",", "") + "}"
 
         messages = [*convo_prefix, user_message]
-        (
-            prompt_tokens,
-            output_tokens_list,
-            output_logprobs_list,
-            finish_reasons_list,
-        ) = await self._generate_with_logprobs(
-            messages=messages,
-            n=self.config.group_size,
-            max_tokens=self.config.max_token_length,
-        )
+
+        async with self.server.managed_server(tokenizer=self.tokenizer) as managed:
+            chat_completion = await managed.chat_completion(
+                messages=messages,
+                n=self.config.group_size,
+                max_tokens=self.config.max_token_length,
+                temperature=1.0,
+            )
+
+            state = managed.get_state()
+            nodes = state["nodes"]
 
         to_score = list()
         to_backlog = list()
-        for i, (output_tokens, logprobs, finish_reason) in enumerate(
-            zip(output_tokens_list, output_logprobs_list, finish_reasons_list)
-        ):
-            full_tokens = prompt_tokens + output_tokens
-
-            output_text = self.tokenizer.decode(output_tokens, skip_special_tokens=True)
-
+        for choice, node in zip(chat_completion.choices, nodes):
             completion_messages = (
                 *convo_prefix,
                 user_message,
-                {"role": "assistant", "content": output_text},
+                {"role": "assistant", "content": choice.message.content},
             )
             to_score.append(
                 {
                     "messages": completion_messages,
                     "gold_answer": gold_answer,
-                    "finish_reason": finish_reason,
-                    "tokens": full_tokens,
-                    "logprobs": logprobs,
-                    "prompt_tokens": prompt_tokens,
+                    "finish_reason": choice.finish_reason,
+                    "tokens": node.tokens,
+                    "masked_tokens": node.masked_tokens,
+                    "logprobs": node.logprobs,
                 }
             )
         to_postprocess = await self.score(to_score)
@@ -344,22 +293,21 @@ class GSM8kEnv(BaseEnv):
                     ],
                     extraction_mode="first_match",
                 )
-                # Reward 1 if the content is the same as the ground truth, 0 otherwise
+                # Binary reward: 1 if correct, 0 otherwise
                 reward = verify(answer_parsed, gold_parsed)
 
-                tokens = item["tokens"]
-                prompt_tokens = item["prompt_tokens"]
+                # Use pre-computed tokens and masks from ManagedServer
+                tokens = item["tokens"]  # Full unmasked tokens
+                masked_tokens = item["masked_tokens"]  # Pre-masked (-100 for prompt)
+                logprobs = item["logprobs"]  # Pre-masked (1.0 for prompt)
 
-                # Create masks
-                prefix_len = len(prompt_tokens)
-                masks = [-100] * prefix_len + tokens[prefix_len:]
-
-                # remove obviously bad examples
-                if len([1 for i in masks if i != -100]) < 10:
+                # Skip very short completions (less than 10 generated tokens)
+                if len([1 for i in masked_tokens if i != -100]) < 10:
                     continue
+
                 scores["tokens"].append(tokens)
-                scores["masks"].append(masks)
-                scores["inference_logprobs"].append(item["logprobs"])
+                scores["masks"].append(masked_tokens)
+                scores["inference_logprobs"].append(logprobs)
                 scores["scores"].append(1.0 if reward else 0.0)
                 if len(scores["tokens"]) >= self.config.group_size:
                     break

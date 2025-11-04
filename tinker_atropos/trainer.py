@@ -15,8 +15,11 @@ from transformers import AutoTokenizer
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from tinker_atropos.types import (
+    GenerateRequest,
     ChatCompletionRequest,
     ChatCompletionResponse,
+    CompletionRequest,
+    CompletionResponse,
 )
 
 
@@ -104,43 +107,6 @@ class TinkerAtroposTrainer:
         result = response.json()
         return result.get("uuid")
 
-    async def generate_with_logprobs(
-        self,
-        messages: List[Dict[str, str]],
-        n: int = 1,
-        max_tokens: int = 256,
-        temperature: float = 0.7,
-        stop: List[str] = None,
-    ) -> tuple[list, list, list, list]:
-        prompt_text = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-        prompt_tokens = self.tokenizer.encode(prompt_text, add_special_tokens=False)
-        model_input = ModelInput.from_ints(prompt_tokens)
-
-        sampling_params = SamplingParams(
-            max_tokens=max_tokens,
-            temperature=temperature,
-            stop=stop if stop else [],
-        )
-
-        result = await self.current_sampling_client.sample_async(
-            prompt=model_input,
-            sampling_params=sampling_params,
-            num_samples=n,
-        )
-
-        output_tokens_list = []
-        output_logprobs_list = []
-        finish_reasons_list = []
-
-        for sequence in result.sequences:
-            output_tokens_list.append(sequence.tokens)
-            output_logprobs_list.append(sequence.logprobs if sequence.logprobs else [])
-            finish_reasons_list.append("stop")  # TODO: get actual finish reason
-
-        return prompt_tokens, output_tokens_list, output_logprobs_list, finish_reasons_list
-
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15))
     def get_batch(self):
         data = requests.get(f"{self.atropos_api_url}/batch", timeout=10).json()
@@ -183,10 +149,9 @@ class TinkerAtroposTrainer:
                 input_tokens = tokens[:-1]
                 target_tokens = tokens[1:]
 
-                ob_len = len(input_tokens) - len(trajectory_logprobs)
+                all_logprobs = trajectory_logprobs[1:]  # Shift right to align with targets
 
-                all_logprobs = [0.0] * ob_len + trajectory_logprobs
-                all_advantages_padded = [0.0] * ob_len + [advantage] * len(trajectory_logprobs)
+                all_advantages_padded = [0.0 if lp == 1.0 else advantage for lp in all_logprobs]
 
                 all_reference_logprobs.extend(all_logprobs)
 
@@ -215,13 +180,14 @@ class TinkerAtroposTrainer:
 
         if all_reference_logprobs:
             logprob_array = np.array(all_reference_logprobs)
-            logprob_array_nonzero = logprob_array[logprob_array != 0.0]
-            if len(logprob_array_nonzero) > 0:
+            # Filter out both 0.0 and 1.0 (1.0 are placeholder values for prompt tokens)
+            logprob_array_actual = logprob_array[(logprob_array != 0.0) & (logprob_array != 1.0)]
+            if len(logprob_array_actual) > 0:
                 self.logprob_stats = {
-                    "logprobs/mean": float(np.mean(logprob_array_nonzero)),
-                    "logprobs/std": float(np.std(logprob_array_nonzero)),
-                    "logprobs/min": float(np.min(logprob_array_nonzero)),
-                    "logprobs/p50": float(np.percentile(logprob_array_nonzero, 50)),
+                    "logprobs/mean": float(np.mean(logprob_array_actual)),
+                    "logprobs/std": float(np.std(logprob_array_actual)),
+                    "logprobs/min": float(np.min(logprob_array_actual)),
+                    "logprobs/p50": float(np.percentile(logprob_array_actual, 50)),
                 }
             else:
                 self.logprob_stats = {}
@@ -384,34 +350,102 @@ async def health():
     }
 
 
+@app.post("/v1/completions", response_model=CompletionResponse)
+async def completions(request: CompletionRequest):
+    """
+    OpenAI-compatible completions endpoint.
+    Called by SGLang server wrapper for regular completions (non-chat).
+    """
+    if trainer is None:
+        raise HTTPException(status_code=503, detail="Trainer not initialized")
+
+    try:
+        # Handle single prompt (string) or batch (list of strings)
+        if isinstance(request.prompt, str):
+            prompts = [request.prompt]
+        else:
+            prompts = request.prompt
+
+        all_choices = []
+        choice_index = 0
+
+        for prompt in prompts:
+            # Tokenize prompt
+            prompt_tokens = trainer.tokenizer.encode(prompt, add_special_tokens=False)
+            model_input = ModelInput.from_ints(prompt_tokens)
+
+            # Generate using Tinker sampling client
+            sampling_params = SamplingParams(
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                stop=request.stop if request.stop else [],
+            )
+
+            result = await trainer.current_sampling_client.sample_async(
+                prompt=model_input,
+                sampling_params=sampling_params,
+                num_samples=request.n,
+            )
+
+            # Format choices
+            for sequence in result.sequences:
+                output_text = trainer.tokenizer.decode(sequence.tokens, skip_special_tokens=True)
+                all_choices.append(
+                    {
+                        "text": output_text,
+                        "index": choice_index,
+                        "finish_reason": "stop",
+                    }
+                )
+                choice_index += 1
+
+        return CompletionResponse(
+            id=f"cmpl-{random.randint(0, 999999)}",
+            choices=all_choices,
+            created=int(time.time()),
+            model=trainer.base_model,
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Completion failed: {str(e)}")
+
+
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def chat_completions(request: ChatCompletionRequest):
+    """
+    OpenAI-compatible chat completions endpoint.
+    Called by SGLang server wrapper for regular chat completions.
+    """
     if trainer is None:
         raise HTTPException(status_code=503, detail="Trainer not initialized")
 
     try:
         messages_dict = [{"role": msg.role, "content": msg.content} for msg in request.messages]
 
-        (
-            prompt_tokens,
-            output_tokens_list,
-            output_logprobs_list,
-            finish_reasons_list,
-        ) = await trainer.generate_with_logprobs(
-            messages=messages_dict,
-            n=request.n,
+        # Apply chat template and tokenize
+        prompt_text = trainer.tokenizer.apply_chat_template(
+            messages_dict, tokenize=False, add_generation_prompt=True
+        )
+        prompt_tokens = trainer.tokenizer.encode(prompt_text, add_special_tokens=False)
+        model_input = ModelInput.from_ints(prompt_tokens)
+
+        # Generate using Tinker sampling client
+        sampling_params = SamplingParams(
             max_tokens=request.max_tokens,
             temperature=request.temperature,
-            stop=request.stop,
+            stop=request.stop if request.stop else [],
         )
 
-        choices = []
-        for i, (output_tokens, logprobs, finish_reason) in enumerate(
-            zip(output_tokens_list, output_logprobs_list, finish_reasons_list)
-        ):
-            full_tokens = prompt_tokens + output_tokens
-            output_text = trainer.tokenizer.decode(output_tokens, skip_special_tokens=True)
+        result = await trainer.current_sampling_client.sample_async(
+            prompt=model_input,
+            sampling_params=sampling_params,
+            num_samples=request.n,
+        )
 
+        # Format as OpenAI response
+        choices = []
+        for i, sequence in enumerate(result.sequences):
+            output_text = trainer.tokenizer.decode(sequence.tokens, skip_special_tokens=True)
             choices.append(
                 {
                     "message": {
@@ -419,9 +453,7 @@ async def chat_completions(request: ChatCompletionRequest):
                         "content": output_text,
                     },
                     "index": i,
-                    "finish_reason": finish_reason,
-                    "logprobs": logprobs,
-                    "tokens": full_tokens,
+                    "finish_reason": "stop",
                 }
             )
 
@@ -434,6 +466,95 @@ async def chat_completions(request: ChatCompletionRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat completion failed: {str(e)}")
+
+
+@app.post("/generate")
+async def generate(request: GenerateRequest):
+    """
+    SGLang-compatible /generate endpoint.
+    Called by ManagedServer with tokenized input_ids.
+    """
+    if trainer is None:
+        raise HTTPException(status_code=503, detail="Trainer not initialized")
+
+    try:
+        # Extract input_ids (ManagedServer sends tokenized input)
+        if request.input_ids is None:
+            raise HTTPException(status_code=400, detail="input_ids is required")
+
+        prompt_tokens = request.input_ids
+
+        # Extract sampling params
+        sampling_params = request.sampling_params or {}
+        n = sampling_params.get("n", 1)
+        max_tokens = sampling_params.get("max_new_tokens", 256)
+        temperature = sampling_params.get("temperature", 1.0)
+        stop = sampling_params.get("stop", [])
+
+        # Generate using Tinker sampling client
+        model_input = ModelInput.from_ints(prompt_tokens)
+        tinker_sampling_params = SamplingParams(
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stop=stop if isinstance(stop, list) else [stop],
+        )
+
+        result = await trainer.current_sampling_client.sample_async(
+            prompt=model_input,
+            sampling_params=tinker_sampling_params,
+            num_samples=n,
+        )
+
+        if n == 1:
+            sequence = result.sequences[0]
+            output_tokens = sequence.tokens
+            output_logprobs = sequence.logprobs if sequence.logprobs else []
+            output_text = trainer.tokenizer.decode(output_tokens, skip_special_tokens=True)
+
+            output_token_logprobs = []
+            for token_id, logprob in zip(output_tokens, output_logprobs):
+                token_text = trainer.tokenizer.decode([token_id])
+                output_token_logprobs.append((logprob, token_id, token_text))
+
+            return {
+                "text": output_text,
+                "meta_info": {
+                    "prompt_tokens": len(prompt_tokens),
+                    "completion_tokens": len(output_tokens),
+                    "finish_reason": "stop",
+                    "output_token_logprobs": output_token_logprobs,
+                },
+            }
+        else:
+            # Multiple completions - return list of dicts
+            results = []
+            for sequence in result.sequences:
+                output_tokens = sequence.tokens
+                output_logprobs = sequence.logprobs if sequence.logprobs else []
+                output_text = trainer.tokenizer.decode(output_tokens, skip_special_tokens=True)
+
+                # Format logprobs as SGLang expects
+                output_token_logprobs = []
+                for token_id, logprob in zip(output_tokens, output_logprobs):
+                    token_text = trainer.tokenizer.decode([token_id])
+                    output_token_logprobs.append((logprob, token_id, token_text))
+
+                results.append(
+                    {
+                        "text": output_text,
+                        "meta_info": {
+                            "prompt_tokens": len(prompt_tokens),
+                            "completion_tokens": len(output_tokens),
+                            "finish_reason": "stop",
+                            "output_token_logprobs": output_token_logprobs,
+                        },
+                    }
+                )
+
+            return results
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
 
 
 def run_fastapi_server():
