@@ -193,6 +193,9 @@ class GSM8kEnv(BaseEnv):
         return {"score": score, "sample": sample}
 
     async def evaluate(self, *args, **kwargs):
+        """
+        Top level evaluation method call with metrics and logging
+        """
         start_time = time.time()
 
         # Generate and score all test examples
@@ -341,6 +344,9 @@ class GSM8kEnv(BaseEnv):
             return None
 
     async def get_next_item(self) -> GSM8kRow:
+        """
+        Atropos specific method for getting the next item from the dataset
+        """
         next_item = self.train[self.iter % len(self.train)]
         self.iter += 1
         return next_item
