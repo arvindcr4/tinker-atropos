@@ -36,6 +36,11 @@ class GSM8kRow(TypedDict):
 
 
 class GSM8kEnv(BaseEnv):
+    """
+    Atropos environment for GSM8k math problems.
+    Generates rollouts, scores them, and provides training batches.
+    """
+
     name = "gsm8k"
 
     def __init__(
@@ -86,7 +91,6 @@ class GSM8kEnv(BaseEnv):
         if wandb_metrics is None:
             wandb_metrics = {}
 
-        # Try to calculate percent_correct, pass if there's a division by zero
         try:
             wandb_metrics["train/percent_correct"] = sum(self.percent_correct_buffer) / len(
                 self.percent_correct_buffer
@@ -122,7 +126,9 @@ class GSM8kEnv(BaseEnv):
         super().save_checkpoint(step, data)
 
     async def rollout_and_score_eval(self, question: str, answer: str) -> dict:
-        """Rollout and score evaluation with detailed sample data collection."""
+        """
+        Generate and score a single evaluation rollout.
+        """
         completion = await self.server.chat_completion(
             messages=[
                 *convo_prefix,
@@ -187,8 +193,12 @@ class GSM8kEnv(BaseEnv):
         return {"score": score, "sample": sample}
 
     async def evaluate(self, *args, **kwargs):
+        """
+        Top level evaluation method call with metrics and logging
+        """
         start_time = time.time()
 
+        # Generate and score all test examples
         eval_tasks = []
         for item in self.test:
             eval_tasks.append(self.rollout_and_score_eval(item["question"], item["gold_answer"]))
@@ -222,9 +232,14 @@ class GSM8kEnv(BaseEnv):
         )
 
     async def collect_trajectories(self, item: GSM8kRow) -> Tuple[ScoredDataGroup, list[Item]]:
+        """
+        Generate rollouts for a single question.
+        Returns scored data.
+        """
         user_message = {"role": "user", "content": item["question"] + question_suffix}
         gold_answer = "\\boxed{" + item["answer"].split("#")[-1].strip().replace(",", "") + "}"
 
+        # Generate group_size rollouts with logprobs
         messages = [*convo_prefix, user_message]
 
         async with self.server.managed_server(tokenizer=self.tokenizer) as managed:
@@ -262,21 +277,27 @@ class GSM8kEnv(BaseEnv):
     async def score(
         self, rollout_group_data
     ) -> Union[Optional[ScoredDataGroup], List[Optional[ScoredDataGroup]]]:
+        """
+        Score a group of rollouts.
+        """
         scores = ScoredDataGroup()
         scores["tokens"] = list()
         scores["masks"] = list()
         scores["scores"] = list()
         scores["inference_logprobs"] = list()
+
+        # Parse gold answer
         gold_parsed = parse(
             rollout_group_data[0]["gold_answer"],
             extraction_mode="first_match",
             extraction_config=[LatexExtractionConfig()],
         )
+
         if len(gold_parsed) != 0:
             # We require the answer to be provided in correct latex (no malformed operators)
             random.shuffle(rollout_group_data)
             for item in rollout_group_data:
-                # print(item[0][-1]["content"])
+                # Parse model answer
                 answer_parsed = parse(
                     item["messages"][-1]["content"].split("</think>")[-1],
                     extraction_config=[
@@ -311,8 +332,10 @@ class GSM8kEnv(BaseEnv):
                 scores["masks"].append(masked_tokens)
                 scores["inference_logprobs"].append(logprobs)
                 scores["scores"].append(1.0 if reward else 0.0)
+
                 if len(scores["tokens"]) >= self.config.group_size:
                     break
+
             for score in scores["scores"]:
                 self.percent_correct_buffer.append(max(score, 0))
             return scores
@@ -321,6 +344,9 @@ class GSM8kEnv(BaseEnv):
             return None
 
     async def get_next_item(self) -> GSM8kRow:
+        """
+        Atropos specific method for getting the next item from the dataset
+        """
         next_item = self.train[self.iter % len(self.train)]
         self.iter += 1
         return next_item

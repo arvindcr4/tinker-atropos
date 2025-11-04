@@ -25,21 +25,29 @@ from tinker_atropos.config import TinkerAtroposConfig
 
 
 class TinkerAtroposTrainer:
+    """
+    Trainer that handles both RL training and inference through Tinker API.
+    Connects to Atropos Trajectory API to coordinate environment interaciton.
+    """
+
     def __init__(self, config: TinkerAtroposConfig):
         self.config = config
 
+        # Model and training config
         self.base_model = config.base_model
         self.lora_rank = config.lora_rank
         self.learning_rate = config.learning_rate
         self.atropos_api_url = config.atropos_api_url
         self.num_steps = config.num_steps
 
+        # Tinker clients
         self.service_client = None
         self.training_client = None
         self.current_sampling_client = None
 
         self.tokenizer = None
 
+        # Atropos registration
         self.trainer_id = None
         self.group_mean_rewards = []
         self.wandb_group = None
@@ -47,12 +55,14 @@ class TinkerAtroposTrainer:
     async def setup(self):
         print("Setting up Tinker-Atropos Trainer...")
 
+        # Create single ServiceClient for both training and inference
         print(f"Creating ServiceClient for {self.base_model}...")
         self.service_client = tinker.ServiceClient()
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.base_model)
         print(f"Loaded tokenizer for {self.base_model}")
 
+        # Create LoRA training client
         print("Creating training client...")
         self.training_client = await self.service_client.create_lora_training_client_async(
             base_model=self.base_model,
@@ -60,6 +70,7 @@ class TinkerAtroposTrainer:
         )
         print("Training client created")
 
+        # Save initial weights and create sampling client
         print("Saving initial weights...")
         initial_path = self.training_client.save_weights_for_sampler(name="step_0").result().path
         self.current_sampling_client = self.service_client.create_sampling_client(
@@ -87,6 +98,7 @@ class TinkerAtroposTrainer:
                 self.config.use_wandb = False
 
     async def _register_trainer(self) -> str:
+        """Register this trainer with the Atropos API server."""
         url = f"{self.atropos_api_url}/register"
 
         payload = {
@@ -108,12 +120,20 @@ class TinkerAtroposTrainer:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15))
     def get_batch(self):
+        """Fetch a batch of rollouts from Atropos API with retry logic."""
         data = requests.get(f"{self.atropos_api_url}/batch", timeout=10).json()
         return data
 
     def pad_data_to_good_offset(
         self, data: Dict[str, Any]
     ) -> tuple[List[tinker.Datum], List[float]]:
+        """
+        Convert Atropos batch into Tinker Datums for training.
+
+        Pads logprobs and advantages to align with token sequences:
+        - Prompt tokens get 0.0 for logprobs and advantages (no gradient)
+        - Generated tokens get actual logprobs and advantages
+        """
         batch = data["batch"]
 
         datums = []
@@ -123,16 +143,19 @@ class TinkerAtroposTrainer:
         skipped_count = 0
 
         for item in batch:
+            # Calculate advantages
             scores = np.array(item["scores"])
             original_mean = np.mean(scores)
             advantages = scores - original_mean
 
+            # Skip groups where all advantages are zero
             if len(scores) > 1 and np.all(advantages == 0.0):
                 skipped_count += 1
                 continue
 
             group_mean_rewards.append(original_mean)
 
+            # Apply advantage overrides
             if item.get("overrides") is not None:
                 for i in range(len(item["overrides"])):
                     if item["overrides"][i].get("set_advantage_to_zero", False):
@@ -177,6 +200,7 @@ class TinkerAtroposTrainer:
                 )
                 datums.append(datum)
 
+        # Calculate logprob stats
         if all_reference_logprobs:
             logprob_array = np.array(all_reference_logprobs)
             # Filter out both 0.0 and 1.0 (1.0 are placeholder values for prompt tokens)
@@ -193,6 +217,7 @@ class TinkerAtroposTrainer:
         else:
             self.logprob_stats = {}
 
+        # Calculate advantage stats
         if all_advantages:
             advantages_array = np.array(all_advantages)
             if np.std(advantages_array) > 1e-6:
@@ -212,6 +237,10 @@ class TinkerAtroposTrainer:
         return datums, group_mean_rewards
 
     def get_data(self) -> List[tinker.Datum]:
+        """
+        Poll Atropos for a batch of rollouts and convert to Tinker Datums.
+        Waits until a batch is available.
+        """
         import time
         import json
 
@@ -229,6 +258,7 @@ class TinkerAtroposTrainer:
                 time.sleep(1)
 
     async def train_step(self, step: int) -> Dict[str, Any]:
+        """Execute one training step: fetch batch, forward-backward, optimizer step."""
         print(f"\n{'='*60}")
         print(f"Step {step}/{self.num_steps}")
         print(f"{'='*60}")
@@ -236,15 +266,18 @@ class TinkerAtroposTrainer:
         step_start = time.time()
         metrics = {"step": step}
 
+        # Fetch batch from Atropos
         print("Fetching data from Atropos...")
         data = self.get_data()
         print(f"Got {len(data)} Datum objects")
 
+        # Forward-backward pass with importance sampling loss
         print("Running forward-backward pass...")
         fwd_bwd_result = await self.training_client.forward_backward_async(
             data, loss_fn="importance_sampling"
         )
 
+        # Optimizer step
         print("Running optimizer step...")
         adam_params = AdamParams(learning_rate=self.learning_rate, beta1=0.9, beta2=0.95, eps=1e-8)
         optim_result = await self.training_client.optim_step_async(adam_params)
@@ -254,6 +287,7 @@ class TinkerAtroposTrainer:
 
         print(f"Loss: {fwd_bwd_result.metrics['loss:sum']}")
 
+        # Calculate training logprob stats
         training_logprobs_all = []
         for datum, output in zip(data, fwd_bwd_result.loss_fn_outputs):
             training_logprobs = output["logprobs"].to_torch()
@@ -271,6 +305,7 @@ class TinkerAtroposTrainer:
                 "logprobs/p50_training": float(np.percentile(training_lp_array, 50)),
             }
 
+            # Calculate logprob drift
             if hasattr(self, "logprob_stats") and "logprobs/mean" in self.logprob_stats:
                 ref_mean = self.logprob_stats["logprobs/mean"]
                 train_mean = float(np.mean(training_lp_array))
@@ -278,6 +313,7 @@ class TinkerAtroposTrainer:
         else:
             self.training_logprob_stats = {}
 
+        # Update sampling client with new weights
         print("Saving checkpoint and updating sampling client...")
         new_path = (
             self.training_client.save_weights_for_sampler(name=f"step_{step+1}").result().path
@@ -314,6 +350,7 @@ class TinkerAtroposTrainer:
         return metrics
 
     async def run(self):
+        """Main training loop."""
         print("\n" + "=" * 60)
         print("Starting Tinker-Atropos Training")
         print("=" * 60 + "\n")
@@ -338,11 +375,13 @@ class TinkerAtroposTrainer:
 
 trainer: TinkerAtroposTrainer | None = None
 
+# FastAPI server for Atropos environment to call for inference
 app = FastAPI(title="Tinker-Atropos Service")
 
 
 @app.get("/health")
 async def health():
+    """Health check endpoint."""
     return {
         "status": "ok",
         "trainer_initialized": trainer is not None,
@@ -566,6 +605,7 @@ async def generate(request: GenerateRequest):
 
 
 def run_fastapi_server():
+    """Run FastAPI server in background thread."""
     import uvicorn
 
     uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
@@ -584,6 +624,7 @@ async def main():
 
     trainer = TinkerAtroposTrainer(config)
 
+    # Start FastAPI server in background thread for Atropos to call
     import threading
 
     server_thread = threading.Thread(target=run_fastapi_server, daemon=True)
