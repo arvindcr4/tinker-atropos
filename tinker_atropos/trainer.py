@@ -21,7 +21,7 @@ from tinker_atropos.types import (
     CompletionRequest,
     CompletionResponse,
 )
-from tinker_atropos.config import TinkerAtroposConfig, set_config
+from tinker_atropos.config import TinkerAtroposConfig
 
 
 class TinkerAtroposTrainer:
@@ -42,6 +42,7 @@ class TinkerAtroposTrainer:
 
         self.trainer_id = None
         self.group_mean_rewards = []
+        self.wandb_group = None
 
     async def setup(self):
         print("Setting up Tinker-Atropos Trainer...")
@@ -66,6 +67,8 @@ class TinkerAtroposTrainer:
         )
         print(f"Initial sampling client created: {initial_path}")
 
+        self.wandb_group = self.config.wandb_group or wandb.sdk.lib.runid.generate_id()
+
         print("Registering with Atropos API...")
         self.trainer_id = await self._register_trainer()
         print(f"Registered as trainer: {self.trainer_id}")
@@ -75,12 +78,10 @@ class TinkerAtroposTrainer:
                 wandb.init(
                     project=self.config.wandb_project,
                     name=f"{self.config.wandb_run_name}-trainer-{self.config.wandb_run_suffix}",
-                    group=self.config.wandb_group,
+                    group=self.wandb_group,
                     tags=["trainer"],
                 )
-                print(
-                    f"Wandb initialized (trainer): {wandb.run.name} in group: {self.config.wandb_group}"
-                )
+                print(f"Wandb initialized (trainer): {wandb.run.name} in group: {self.wandb_group}")
             except Exception as e:
                 print(f"Error initializing wandb: {e}")
                 self.config.use_wandb = False
@@ -90,7 +91,7 @@ class TinkerAtroposTrainer:
 
         payload = {
             "wandb_project": self.config.wandb_project,
-            "wandb_group": self.config.wandb_group,
+            "wandb_group": self.wandb_group,
             "batch_size": self.config.batch_size,
             "max_token_len": self.config.max_token_trainer_length,
             "starting_step": 0,
@@ -406,6 +407,15 @@ async def completions(request: CompletionRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Completion failed: {str(e)}")
+@app.get("/wandb_info")
+async def wandb_info():
+    if trainer is None:
+        raise HTTPException(status_code=503, detail="Trainer not initialized")
+
+    return {
+        "group": trainer.wandb_group,
+        "project": trainer.config.wandb_project,
+    }
 
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
@@ -569,8 +579,6 @@ async def main():
         learning_rate=float(os.getenv("LEARNING_RATE", "4e-5")),
         num_steps=50,
     )
-
-    set_config(config)
 
     print(f"Using wandb run: {config.wandb_run_name}")
 

@@ -14,7 +14,7 @@ from atroposlib.envs.base import (
     ScoredDataGroup,
 )
 from atroposlib.type_definitions import Item
-from tinker_atropos.config import get_config
+from tinker_atropos.config import TinkerAtroposConfig
 
 question_suffix = " Provide a numerical answer without units, written inside \\boxed{}."
 
@@ -54,7 +54,7 @@ class GSM8kEnv(BaseEnv):
 
     @classmethod
     def config_init(cls) -> Tuple[BaseEnvConfig, List[APIServerConfig]]:
-        config = get_config()
+        config = TinkerAtroposConfig()
 
         env_config = BaseEnvConfig(
             tokenizer_name=config.base_model,
@@ -67,7 +67,7 @@ class GSM8kEnv(BaseEnv):
             max_token_length=config.max_token_env_length,
             max_num_workers=config.max_num_workers,
             max_batches_offpolicy=config.max_batches_offpolicy,
-            wandb_name=f"{config.wandb_run_name}-env",  # Env run name
+            wandb_name=f"{config.wandb_run_name}-env",
             ensure_scores_not_the_same=config.ensure_scores_not_the_same,
         )
         server_configs = [
