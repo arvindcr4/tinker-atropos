@@ -1,10 +1,12 @@
 import pytest
 from tinker_atropos.trainer import TinkerAtroposTrainer
+from tinker_atropos.config import TinkerAtroposConfig
 
 
 @pytest.fixture
 def trainer():
-    trainer = TinkerAtroposTrainer(base_model="meta-llama/Llama-3.1-8B-Instruct")
+    config = TinkerAtroposConfig(base_model="meta-llama/Llama-3.1-8B-Instruct")
+    trainer = TinkerAtroposTrainer(config=config)
     return trainer
 
 

@@ -21,22 +21,18 @@ from tinker_atropos.types import (
     CompletionRequest,
     CompletionResponse,
 )
+from tinker_atropos.config import TinkerAtroposConfig
 
 
 class TinkerAtroposTrainer:
-    def __init__(
-        self,
-        base_model: str = "meta-llama/Llama-3.1-8B-Instruct",
-        lora_rank: int = 32,
-        learning_rate: float = 4e-5,
-        atropos_api_url: str = "http://localhost:8000",
-        num_steps: int = 100,
-    ):
-        self.base_model = base_model
-        self.lora_rank = lora_rank
-        self.learning_rate = learning_rate
-        self.atropos_api_url = atropos_api_url
-        self.num_steps = num_steps
+    def __init__(self, config: TinkerAtroposConfig):
+        self.config = config
+
+        self.base_model = config.base_model
+        self.lora_rank = config.lora_rank
+        self.learning_rate = config.learning_rate
+        self.atropos_api_url = config.atropos_api_url
+        self.num_steps = config.num_steps
 
         self.service_client = None
         self.training_client = None
@@ -46,9 +42,7 @@ class TinkerAtroposTrainer:
 
         self.trainer_id = None
         self.group_mean_rewards = []
-        self.use_wandb = True
-        self.wandb_project = "atropos-tinker"
-        self.wandb_group = "tinker_logging_group"  # "".join(random.choices(string.ascii_letters + string.digits, k=8))
+        self.wandb_group = None
 
     async def setup(self):
         print("Setting up Tinker-Atropos Trainer...")
@@ -73,31 +67,36 @@ class TinkerAtroposTrainer:
         )
         print(f"Initial sampling client created: {initial_path}")
 
+        self.wandb_group = self.config.wandb_group or wandb.sdk.lib.runid.generate_id()
+
         print("Registering with Atropos API...")
         self.trainer_id = await self._register_trainer()
         print(f"Registered as trainer: {self.trainer_id}")
 
-        if self.use_wandb:
+        if self.config.use_wandb:
             try:
                 wandb.init(
-                    project=self.wandb_project, group=self.wandb_group, name="wandb_test_name"
+                    project=self.config.wandb_project,
+                    name=f"{self.config.wandb_run_name}-trainer-{self.config.wandb_run_suffix}",
+                    group=self.wandb_group,
+                    tags=["trainer"],
                 )
-                print(f"Wandb initialized: {wandb.run.name}")
+                print(f"Wandb initialized (trainer): {wandb.run.name} in group: {self.wandb_group}")
             except Exception as e:
                 print(f"Error initializing wandb: {e}")
-                self.use_wandb = False
+                self.config.use_wandb = False
 
     async def _register_trainer(self) -> str:
         url = f"{self.atropos_api_url}/register"
 
         payload = {
+            "wandb_project": self.config.wandb_project,
             "wandb_group": self.wandb_group,
-            "wandb_project": self.wandb_project,
-            "batch_size": 128,
-            "max_token_len": 2048,
+            "batch_size": self.config.batch_size,
+            "max_token_len": self.config.max_token_trainer_length,
             "starting_step": 0,
-            "checkpoint_dir": "./temp/",
-            "save_checkpoint_interval": 0,
+            "checkpoint_dir": self.config.checkpoint_dir,
+            "save_checkpoint_interval": self.config.save_checkpoint_interval,
             "num_steps": self.num_steps,
         }
 
@@ -296,7 +295,7 @@ class TinkerAtroposTrainer:
             metrics["reward/mean"] = np.mean(self.group_mean_rewards)
             print(f"Reward/mean: {metrics['reward/mean']:.4f}")
 
-        if self.use_wandb:
+        if self.config.use_wandb:
             wandb_metrics = {
                 "train/loss": fwd_bwd_result.metrics["loss:sum"],
                 "train/learning_rate": self.learning_rate,
@@ -408,6 +407,15 @@ async def completions(request: CompletionRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Completion failed: {str(e)}")
+@app.get("/wandb_info")
+async def wandb_info():
+    if trainer is None:
+        raise HTTPException(status_code=503, detail="Trainer not initialized")
+
+    return {
+        "group": trainer.wandb_group,
+        "project": trainer.config.wandb_project,
+    }
 
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
@@ -566,12 +574,15 @@ def run_fastapi_server():
 async def main():
     global trainer
 
-    trainer = TinkerAtroposTrainer(
-        base_model="meta-llama/Llama-3.1-8B-Instruct",
+    config = TinkerAtroposConfig(
         lora_rank=int(os.getenv("LORA_RANK", "32")),
         learning_rate=float(os.getenv("LEARNING_RATE", "4e-5")),
         num_steps=50,
     )
+
+    print(f"Using wandb run: {config.wandb_run_name}")
+
+    trainer = TinkerAtroposTrainer(config)
 
     import threading
 
