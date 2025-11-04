@@ -1,0 +1,28 @@
+# Quick test configuration with minimal resources
+# Useful for testing the setup and debugging
+
+base_model: "meta-llama/Llama-3.1-8B-Instruct"
+lora_rank: 16
+learning_rate: 0.0001
+
+num_steps: 10
+batch_size: 32
+group_size: 4
+max_token_env_length: 128
+max_token_trainer_length: 512
+max_num_workers: 16
+max_batches_offpolicy: 2
+
+use_wandb: false
+wandb_project: "atropos-tinker-test"
+
+atropos_api_url: "http://localhost:8000"
+inference_api_url: "http://localhost:8001"
+
+checkpoint_dir: "./temp/"
+save_checkpoint_interval: 0
+
+steps_per_eval: 10
+num_requests_for_eval: 64
+
+ensure_scores_not_the_same: true

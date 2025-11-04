@@ -1,7 +1,9 @@
 import random
 import string
+from pathlib import Path
 from typing import Optional
 
+import yaml
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,6 +13,7 @@ def generate_run_suffix() -> str:
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
 
 
+# Values here are set as the default values when not using a config YAML
 class TinkerAtroposConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="TINKER_ATROPOS_",
@@ -57,3 +60,17 @@ class TinkerAtroposConfig(BaseSettings):
 
     def to_dict(self):
         return self.model_dump()
+
+    @classmethod
+    def from_yaml(cls, yaml_path: str | Path) -> "TinkerAtroposConfig":
+        """
+        Load configuration from a YAML file.
+        """
+        yaml_path = Path(yaml_path)
+        if not yaml_path.exists():
+            raise FileNotFoundError(f"Config file not found: {yaml_path}")
+
+        with open(yaml_path, "r") as f:
+            yaml_data = yaml.safe_load(f)
+
+        return cls(**yaml_data)
