@@ -43,7 +43,7 @@ def load_config(args) -> TinkerAtroposConfig:
     """
     Load configuration from YAML file and apply CLI overrides.
     """
-    # Start with YAML config if provided, otherwise use defaults
+
     if args.config:
         print(f"Loading config from: {args.config}")
         config = TinkerAtroposConfig.from_yaml(args.config)

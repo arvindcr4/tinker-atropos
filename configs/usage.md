@@ -20,21 +20,9 @@ Minimal resource configuration optimized for rapid testing and debugging.
 
 **Use case**: Local testing, debugging, CI/CD pipelines
 
-### `production.yaml`
-Large-scale configuration for production training runs.
-
-**Features**:
-- Higher LoRA rank for better model capacity
-- Larger batch sizes and token lengths
-- More parallel workers
-- Checkpointing enabled
-- Full wandb logging
-
-**Use case**: Full-scale training runs, production deployments
-
 ## Configuration Parameters
 
-### Model Configuration
+### Tinker Model Configuration
 - `base_model`: HuggingFace model identifier (default: "meta-llama/Llama-3.1-8B-Instruct")
 - `lora_rank`: Rank of LoRA adapters (default: 32)
 - `learning_rate`: Optimizer learning rate (default: 0.00004)
@@ -45,7 +33,7 @@ Large-scale configuration for production training runs.
 - `group_size`: Number of rollouts generated per question (default: 16)
 - `max_token_env_length`: Maximum tokens for environment rollouts (default: 256)
 - `max_token_trainer_length`: Maximum tokens for trainer processing (default: 2048)
-- `max_num_workers`: Maximum parallel workers for rollout generation (default: 24)
+- `max_num_workers`: Maximum parallel workers for rollout generation (calculated as (batch_size * num_offpolicy // group_size)) (default: 24)
 - `max_batches_offpolicy`: Maximum batches before data considered stale (default: 3)
 
 ### Weights & Biases Configuration
@@ -58,10 +46,6 @@ Large-scale configuration for production training runs.
 ### API Endpoints
 - `atropos_api_url`: URL for Atropos rollout server (default: "http://localhost:8000")
 - `inference_api_url`: URL for unified trainer inference endpoint (default: "http://localhost:8001")
-
-### Checkpointing
-- `checkpoint_dir`: Directory for saving model checkpoints (default: "./temp/")
-- `save_checkpoint_interval`: Steps between checkpoints, 0 to disable (default: 0)
 
 ### Evaluation
 - `steps_per_eval`: Steps between evaluation runs (default: 100)
@@ -100,7 +84,7 @@ python launch_training.py --config configs/quick_test.yaml \
 from tinker_atropos.config import TinkerAtroposConfig
 
 # Load from YAML
-config = TinkerAtroposConfig.from_yaml("configs/production.yaml")
+config = TinkerAtroposConfig.from_yaml("configs/quick_test.yaml")
 
 # Modify programmatically
 config.num_steps = 500
@@ -173,7 +157,6 @@ python launch_training.py
 
 - Start with `quick_test.yaml` to validate your setup
 - Use `default.yaml` as a template for custom configs
-- Enable wandb logging for production runs to track metrics
-- Adjust `max_num_workers` based on your available compute
-- Set `save_checkpoint_interval > 0` for long training runs
+- Enable wandb logging for runs to track metrics
+- Adjust `max_num_workers` based on your batch size, group size, and max_batches_offpolicy value
 - Use CLI overrides for one-off experiments without creating new config files
