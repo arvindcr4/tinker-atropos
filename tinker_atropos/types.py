@@ -55,7 +55,9 @@ class GenerateRequest(BaseModel):
     stream: bool = False  # Whether to stream responses
 
 
-# Response format for /generate endpoint (SGLang compatible). - unused currently
+# Response format for /generate endpoint (SGLang compatible).
+# For single completion (n=1): returns one GenerateResponse
+# For multiple completions (n>1): returns List[GenerateResponse]
 class GenerateResponse(BaseModel):
     text: str | List[str]  # Generated text(s)
     meta_info: Dict[
