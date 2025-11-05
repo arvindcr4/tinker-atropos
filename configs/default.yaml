@@ -1,0 +1,37 @@
+# Default configuration for Tinker-Atropos training
+# This file demonstrates all available configuration options
+
+# Model configuration
+base_model: "meta-llama/Llama-3.1-8B-Instruct"
+lora_rank: 32
+learning_rate: 0.00004
+
+# Training configuration
+num_steps: 50
+batch_size: 128
+group_size: 16
+max_token_env_length: 256
+max_token_trainer_length: 2048
+max_num_workers: 24
+max_batches_offpolicy: 3
+
+# Weights & Biases configuration
+use_wandb: true
+wandb_project: "atropos-tinker"
+wandb_group: null  # Will be auto-generated if not specified
+wandb_run_name: "atropos-tinker-run"
+
+# API endpoints
+atropos_api_url: "http://localhost:8000"
+inference_api_url: "http://localhost:8001"
+
+# Checkpoint configuration (needed for Atropos BaseEnvConfig - not used)
+checkpoint_dir: "./temp/"
+save_checkpoint_interval: 0
+
+# Evaluation configuration
+steps_per_eval: 100
+num_requests_for_eval: 256
+
+# Training options
+ensure_scores_not_the_same: false
