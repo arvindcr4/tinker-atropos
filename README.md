@@ -116,3 +116,9 @@ trainer = TinkerAtroposTrainer(config=config)
 ```bash
 python -m pytest tinker_atropos/tests/ -v
 ```
+
+
+## Documentation
+
+- Atropos: https://github.com/NousResearch/atropos
+- Tinker: https://tinker-docs.thinkingmachines.ai
