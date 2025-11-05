@@ -19,12 +19,6 @@ class CompletionResponse(BaseModel):
     model: str
 
 
-# Request format for /internal/update_weights endpoint.
-class UpdateWeightsRequest(BaseModel):
-    model_path: str
-    step: int | None = None
-
-
 class ChatMessage(BaseModel):
     role: str  # "system", "user", "assistant"
     content: str
@@ -61,7 +55,7 @@ class GenerateRequest(BaseModel):
     stream: bool = False  # Whether to stream responses
 
 
-# Response format for /generate endpoint (SGLang compatible).
+# Response format for /generate endpoint (SGLang compatible). - unused currently
 class GenerateResponse(BaseModel):
     text: str | List[str]  # Generated text(s)
     meta_info: Dict[
