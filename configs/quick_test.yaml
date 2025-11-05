@@ -1,7 +1,7 @@
 # Quick test configuration with minimal resources
 # Useful for testing the setup and debugging
 
-base_model: "meta-llama/Llama-3.1-8B-Instruct"
+base_model: "meta-llama/Llama-3.1-1B"
 lora_rank: 16
 learning_rate: 0.0001
 
