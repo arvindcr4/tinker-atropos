@@ -16,6 +16,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from tinker_atropos.types import (
     GenerateRequest,
+    GenerateResponse,
     ChatCompletionRequest,
     ChatCompletionResponse,
     CompletionRequest,
@@ -372,6 +373,10 @@ class TinkerAtroposTrainer:
         print("Training complete!")
         print("=" * 60 + "\n")
 
+        print(
+            f"Final weights are available here: tinker://{str(self.training_client.model_id)}/sampler_weights/final"
+        )
+
 
 trainer: TinkerAtroposTrainer | None = None
 
@@ -446,6 +451,8 @@ async def completions(request: CompletionRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Completion failed: {str(e)}")
+
+
 @app.get("/wandb_info")
 async def wandb_info():
     if trainer is None:
@@ -515,11 +522,12 @@ async def chat_completions(request: ChatCompletionRequest):
         raise HTTPException(status_code=500, detail=f"Chat completion failed: {str(e)}")
 
 
-@app.post("/generate")
+@app.post("/generate", response_model=GenerateResponse | List[GenerateResponse])
 async def generate(request: GenerateRequest):
     """
     SGLang-compatible /generate endpoint.
     Called by ManagedServer with tokenized input_ids.
+    Returns GenerateResponse for single completion (n=1) or List[GenerateResponse] for multiple (n>1).
     """
     if trainer is None:
         raise HTTPException(status_code=503, detail="Trainer not initialized")
@@ -563,17 +571,17 @@ async def generate(request: GenerateRequest):
                 token_text = trainer.tokenizer.decode([token_id])
                 output_token_logprobs.append((logprob, token_id, token_text))
 
-            return {
-                "text": output_text,
-                "meta_info": {
+            return GenerateResponse(
+                text=output_text,
+                meta_info={
                     "prompt_tokens": len(prompt_tokens),
                     "completion_tokens": len(output_tokens),
                     "finish_reason": "stop",
                     "output_token_logprobs": output_token_logprobs,
                 },
-            }
+            )
         else:
-            # Multiple completions - return list of dicts
+            # Multiple completions - return list of GenerateResponse objects
             results = []
             for sequence in result.sequences:
                 output_tokens = sequence.tokens
@@ -587,15 +595,15 @@ async def generate(request: GenerateRequest):
                     output_token_logprobs.append((logprob, token_id, token_text))
 
                 results.append(
-                    {
-                        "text": output_text,
-                        "meta_info": {
+                    GenerateResponse(
+                        text=output_text,
+                        meta_info={
                             "prompt_tokens": len(prompt_tokens),
                             "completion_tokens": len(output_tokens),
                             "finish_reason": "stop",
                             "output_token_logprobs": output_token_logprobs,
                         },
-                    }
+                    )
                 )
 
             return results
