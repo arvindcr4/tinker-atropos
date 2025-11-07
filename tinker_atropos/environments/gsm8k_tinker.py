@@ -16,7 +16,7 @@ from atroposlib.envs.base import (
 from atroposlib.type_definitions import Item
 from tinker_atropos.config import TinkerAtroposConfig
 
-CONFIG_PATH = "configs/quick_test.yaml"
+CONFIG_PATH = "configs/default.yaml"
 
 question_suffix = " Provide a numerical answer without units, written inside \\boxed{}."
 

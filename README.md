@@ -20,7 +20,7 @@ run-api
 
 # Terminal 2: Start training
 export TINKER_API_KEY="<your-key>"
-python launch_training.py --config configs/quick_test.yaml
+python launch_training.py --config configs/default.yaml
 
 # Terminal 3: Start environment
 python tinker_atropos/environments/gsm8k_tinker.py serve
