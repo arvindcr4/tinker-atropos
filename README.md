@@ -1,6 +1,6 @@
 # tinker-atropos
 
-Atropos integration with Thinking Machines Tinker API (https://thinkingmachines.ai/tinker/). Train models with your Atropos environments from your CPU, without having to worry about underlying compute management or implementation.
+An integration layer connecting Atropos with the Thinking Machines Tinker API (https://thinkingmachines.ai/tinker/). This package enables seamless model training with Atropos environments from your local machine, abstracting away compute management and infrastructure concerns.
 
 ## Installation
 
@@ -30,7 +30,7 @@ This runs a 10-step training example with Llama-3.1-1B on the GSM8k environment.
 
 ## Integration with Atropos Environments
 
-Atropos environments using the following pattern for inference can integrate directly with the Tinker trainer:
+Atropos environments that utilize the following inference pattern are compatible with the Tinker trainer:
 
 ```python
 async with self.server.managed_server(tokenizer=self.tokenizer) as managed:
@@ -45,17 +45,17 @@ async with self.server.managed_server(tokenizer=self.tokenizer) as managed:
     nodes = state["nodes"]
 ```
 
-### How To Implement With An Existing Atropos Environment
+### Implementation Guide for Existing Atropos Environments
 
-1. The `TinkerAtroposConfig` should be loaded in the environment (inside `config.init`), pointing to your desired `config.yaml`, like so:
+1. Load the `TinkerAtroposConfig` within your environment's initialization (inside `config.init`), specifying the path to your desired configuration file:
 
-```
+```python
 config = TinkerAtroposConfig.from_yaml("configs/default.yaml")
 ```
 
-2. The `BaseEnvConfig`, or whatever is overridden for configuration there, should be set up to use these values, like so:
+2. Configure the `BaseEnvConfig` (or your custom configuration class) to utilize the loaded values:
 
-```
+```python
 env_config = BaseEnvConfig(
     tokenizer_name=config.base_model,
     group_size=config.group_size,
@@ -72,7 +72,7 @@ env_config = BaseEnvConfig(
 )
 ```
 
-3. As long as your environment uses the `self.server.managed_server` pattern for inference requests like above, this should *just work*.
+3. Ensure your environment uses the `self.server.managed_server` pattern for inference requests as demonstrated above. No additional modifications are required for Tinker integration.
 
 
 ## Downloading Weights
