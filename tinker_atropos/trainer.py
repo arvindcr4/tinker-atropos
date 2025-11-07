@@ -327,6 +327,7 @@ class TinkerAtroposTrainer:
         step_time = time.time() - step_start
         metrics["step_time"] = step_time
         metrics["learning_rate"] = self.learning_rate
+        metrics["loss"] = fwd_bwd_result.metrics["loss:sum"]
 
         if self.group_mean_rewards:
             metrics["reward/mean"] = np.mean(self.group_mean_rewards)

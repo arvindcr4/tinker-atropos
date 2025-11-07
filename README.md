@@ -1,6 +1,6 @@
 # tinker-atropos
 
-Atropos integration with Thinking Machines Tinker API (https://thinkingmachines.ai/tinker/)
+An integration layer connecting Atropos with the Thinking Machines Tinker API (https://thinkingmachines.ai/tinker/). This package enables seamless model training with Atropos environments from your local machine, abstracting away compute management and infrastructure concerns.
 
 ## Installation
 
@@ -20,17 +20,17 @@ run-api
 
 # Terminal 2: Start training
 export TINKER_API_KEY="<your-key>"
-python launch_training.py --config configs/quick_test.yaml
+python launch_training.py --config configs/default.yaml
 
 # Terminal 3: Start environment
 python tinker_atropos/environments/gsm8k_tinker.py serve
 ```
 
-This runs a 10-step training example with Llama-3.1-8B on the GSM8k environment.
+This runs a 10-step training example with Llama-3.2-1B on the GSM8k environment. To use a different configuration file for the environment, modify the `CONFIG_PATH` variable at the top of `gsm8k_tinker.py`.
 
 ## Integration with Atropos Environments
 
-Atropos environments using the following pattern for inference can integrate directly with the Tinker trainer:
+Atropos environments that utilize the following inference pattern are compatible with the Tinker trainer:
 
 ```python
 async with self.server.managed_server(tokenizer=self.tokenizer) as managed:
@@ -44,6 +44,36 @@ async with self.server.managed_server(tokenizer=self.tokenizer) as managed:
     state = managed.get_state()
     nodes = state["nodes"]
 ```
+
+### Implementation Guide for Existing Atropos Environments
+
+1. Load the `TinkerAtroposConfig` within your environment's initialization (inside `config.init`), specifying the path to your desired configuration file:
+
+```python
+config = TinkerAtroposConfig.from_yaml("configs/default.yaml")
+```
+
+2. Configure the `BaseEnvConfig` (or your custom configuration class) to utilize the loaded values:
+
+```python
+env_config = BaseEnvConfig(
+    tokenizer_name=config.base_model,
+    group_size=config.group_size,
+    use_wandb=config.use_wandb,
+    rollout_server_url=config.atropos_api_url,
+    total_steps=config.num_steps,
+    batch_size=config.batch_size,
+    steps_per_eval=config.steps_per_eval,
+    max_token_length=config.max_token_env_length,
+    max_num_workers=config.max_num_workers,
+    max_batches_offpolicy=config.max_batches_offpolicy,
+    wandb_name=f"{config.wandb_run_name}-env",
+    ensure_scores_not_the_same=config.ensure_scores_not_the_same,
+)
+```
+
+3. Ensure your environment uses the `self.server.managed_server` pattern for inference requests as demonstrated above. No additional modifications are required for Tinker integration.
+
 
 ## Downloading Weights
 
@@ -65,7 +95,7 @@ Weights will be saved to the specified location.
 
 ## Configuration
 
-The trainer supports YAML configuration files for environment management.
+Both the trainer and environment support YAML configuration files to ensure parameter consistency across your training pipeline. The provided environment file (`gsm8k_tinker.py`) references a configuration path that should match the trainer's configuration. Update the `CONFIG_PATH` variable in the environment file when switching between configurations.
 
 ### Usage
 
@@ -91,7 +121,6 @@ python launch_training.py --config configs/default.yaml --num-steps 100 --no-wan
 - **Training**: `num_steps`, `batch_size`, `group_size`, `max_token_env_length`, `max_token_trainer_length`
 - **Wandb**: `use_wandb`, `wandb_project`, `wandb_group`, `wandb_run_name`
 - **APIs**: `atropos_api_url`, `inference_api_url`
-- **Checkpointing**: `checkpoint_dir`, `save_checkpoint_interval`
 
 See `configs/` for complete parameter lists.
 
@@ -117,6 +146,9 @@ trainer = TinkerAtroposTrainer(config=config)
 python -m pytest tinker_atropos/tests/ -v
 ```
 
+## Cost
+
+The Tinker Rate Card and available models are listed here: https://tinker-console.thinkingmachines.ai/rate-card
 
 ## Documentation
 
