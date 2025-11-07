@@ -26,7 +26,7 @@ python launch_training.py --config configs/quick_test.yaml
 python tinker_atropos/environments/gsm8k_tinker.py serve
 ```
 
-This runs a 10-step training example with Llama-3.1-1B on the GSM8k environment.
+This runs a 10-step training example with Llama-3.2-1B on the GSM8k environment. To use a different configuration file for the environment, modify the `CONFIG_PATH` variable at the top of `gsm8k_tinker.py`.
 
 ## Integration with Atropos Environments
 
@@ -95,7 +95,7 @@ Weights will be saved to the specified location.
 
 ## Configuration
 
-The trainer supports YAML configuration files for environment management.
+Both the trainer and environment support YAML configuration files to ensure parameter consistency across your training pipeline. The provided environment file (`gsm8k_tinker.py`) references a configuration path that should match the trainer's configuration. Update the `CONFIG_PATH` variable in the environment file when switching between configurations.
 
 ### Usage
 

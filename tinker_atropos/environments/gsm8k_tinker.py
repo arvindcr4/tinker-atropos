@@ -16,6 +16,8 @@ from atroposlib.envs.base import (
 from atroposlib.type_definitions import Item
 from tinker_atropos.config import TinkerAtroposConfig
 
+CONFIG_PATH = "configs/quick_test.yaml"
+
 question_suffix = " Provide a numerical answer without units, written inside \\boxed{}."
 
 convo_prefix = [
@@ -59,7 +61,9 @@ class GSM8kEnv(BaseEnv):
 
     @classmethod
     def config_init(cls) -> Tuple[BaseEnvConfig, List[APIServerConfig]]:
-        config = TinkerAtroposConfig()
+        config = (
+            TinkerAtroposConfig.from_yaml(CONFIG_PATH) if CONFIG_PATH else TinkerAtroposConfig()
+        )
 
         env_config = BaseEnvConfig(
             tokenizer_name=config.base_model,
@@ -107,6 +111,24 @@ class GSM8kEnv(BaseEnv):
         await super().wandb_log(wandb_metrics)
 
     async def setup(self):
+        # Ensure tokenizer has a chat template
+        if self.tokenizer.chat_template is None:
+            # Set default Llama-style chat template
+            self.tokenizer.chat_template = (
+                "{% for message in messages %}"
+                "{% if message['role'] == 'system' %}"
+                "{{ '<|start_header_id|>system<|end_header_id|>\n\n' + message['content'] + '<|eot_id|>' }}"
+                "{% elif message['role'] == 'user' %}"
+                "{{ '<|start_header_id|>user<|end_header_id|>\n\n' + message['content'] + '<|eot_id|>' }}"
+                "{% elif message['role'] == 'assistant' %}"
+                "{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' + message['content'] + '<|eot_id|>' }}"
+                "{% endif %}"
+                "{% if loop.last and message['role'] != 'assistant' %}"
+                "{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}"
+                "{% endif %}"
+                "{% endfor %}"
+            )
+
         self.train = load_dataset("gsm8k", "main", split="train").shuffle(seed=42)
         test_data = load_dataset("gsm8k", "main", split="test").shuffle(seed=42)
         self.test = list()
