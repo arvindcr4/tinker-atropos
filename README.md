@@ -20,13 +20,13 @@ run-api
 
 # Terminal 2: Start training
 export TINKER_API_KEY="<your-key>"
-python launch_training.py --config configs/default.yaml
+python launch_training.py --config configs/default.yaml --num-steps 10
 
 # Terminal 3: Start environment
 python tinker_atropos/environments/gsm8k_tinker.py serve
 ```
 
-This runs a 10-step training example with Llama-3.2-1B on the GSM8k environment. To use a different configuration file for the environment, modify the `CONFIG_PATH` variable at the top of `gsm8k_tinker.py`.
+This runs a 10-step training example with Llama-3.1-8B-Instruct on the GSM8k environment. To use a different configuration file for the environment, modify the `CONFIG_PATH` variable at the top of `gsm8k_tinker.py`.
 
 ## Integration with Atropos Environments
 
