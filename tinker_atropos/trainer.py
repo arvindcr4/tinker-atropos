@@ -402,7 +402,7 @@ async def health():
 async def completions(request: CompletionRequest):
     """
     OpenAI-compatible completions endpoint.
-    Called by SGLang server wrapper for regular completions (non-chat).
+    Called by server wrapper for regular completions (non-chat).
     """
     if trainer is None:
         raise HTTPException(status_code=503, detail="Trainer not initialized")
@@ -473,7 +473,7 @@ async def wandb_info():
 async def chat_completions(request: ChatCompletionRequest):
     """
     OpenAI-compatible chat completions endpoint.
-    Called by SGLang server wrapper for regular chat completions.
+    Called by server wrapper for regular chat completions.
     """
     if trainer is None:
         raise HTTPException(status_code=503, detail="Trainer not initialized")
@@ -530,7 +530,6 @@ async def chat_completions(request: ChatCompletionRequest):
 @app.post("/generate", response_model=GenerateResponse | List[GenerateResponse])
 async def generate(request: GenerateRequest):
     """
-    SGLang-compatible /generate endpoint.
     Called by ManagedServer with tokenized input_ids.
     Returns GenerateResponse for single completion (n=1) or List[GenerateResponse] for multiple (n>1).
     """
