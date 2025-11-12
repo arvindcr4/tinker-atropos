@@ -23,6 +23,11 @@ from tinker_atropos.types import (
     CompletionResponse,
 )
 from tinker_atropos.config import TinkerAtroposConfig
+from tinker_atropos.simple_metrics import (
+    SimpleMetricsTracker,
+    count_train_tokens_from_data,
+    count_sampling_tokens_from_batch,
+)
 
 
 class TinkerAtroposTrainer:
@@ -52,6 +57,10 @@ class TinkerAtroposTrainer:
         self.trainer_id = None
         self.group_mean_rewards = []
         self.wandb_group = None
+
+        # Metrics tracking
+        self.metrics_tracker = SimpleMetricsTracker(output_file="tinker_atropos_metrics.txt")
+        self.last_batch_raw = None
 
     async def setup(self):
         print("Setting up Tinker-Atropos Trainer...")
@@ -252,6 +261,9 @@ class TinkerAtroposTrainer:
                 with open("temp.json", "w", encoding="utf-8") as f:
                     json.dump(data, f)
 
+                # Store raw batch for token counting
+                self.last_batch_raw = data
+
                 datums, group_mean_rewards = self.pad_data_to_good_offset(data)
                 self.group_mean_rewards = group_mean_rewards
                 return datums
@@ -264,13 +276,19 @@ class TinkerAtroposTrainer:
         print(f"Step {step}/{self.num_steps}")
         print(f"{'='*60}")
 
-        step_start = time.time()
-        metrics = {"step": step}
+        # START METRICS TRACKING
+        self.metrics_tracker.start_step(step)
 
         # Fetch batch from Atropos
         print("Fetching data from Atropos...")
         data = self.get_data()
         print(f"Got {len(data)} Datum objects")
+
+        # Count tokens
+        train_tokens = count_train_tokens_from_data(data)
+        sampling_tokens = (
+            count_sampling_tokens_from_batch(self.last_batch_raw) if self.last_batch_raw else 0
+        )
 
         # Forward-backward pass with importance sampling loss
         print("Running forward-backward pass...")
@@ -288,29 +306,39 @@ class TinkerAtroposTrainer:
 
         print(f"Loss: {fwd_bwd_result.metrics['loss:sum']}")
 
-        # Calculate training logprob stats
+        # Calculate training logprob stats and logprob diff
         training_logprobs_all = []
+        reference_logprobs_all = []
+
         for datum, output in zip(data, fwd_bwd_result.loss_fn_outputs):
             training_logprobs = output["logprobs"].to_torch()
+            reference_logprobs = datum.loss_fn_inputs["logprobs"].to_torch()
             advantages = datum.loss_fn_inputs["advantages"].to_torch()
+
+            # Only include completion tokens (where advantage != 0.0)
             mask = advantages != 0.0
             training_lp_masked = training_logprobs[mask]
-            training_logprobs_all.extend(training_lp_masked.cpu().numpy().tolist())
+            reference_lp_masked = reference_logprobs[mask]
 
-        if training_logprobs_all:
+            training_logprobs_all.extend(training_lp_masked.cpu().numpy().tolist())
+            reference_logprobs_all.extend(reference_lp_masked.cpu().numpy().tolist())
+
+        # Calculate average logprob diff
+        avg_logprob_diff = 0.0
+        if training_logprobs_all and reference_logprobs_all:
             training_lp_array = np.array(training_logprobs_all)
+            reference_lp_array = np.array(reference_logprobs_all)
+
+            # Diff = reference - training (positive means policy diverged)
+            avg_logprob_diff = float(np.mean(reference_lp_array - training_lp_array))
+
             self.training_logprob_stats = {
                 "logprobs/mean_training": float(np.mean(training_lp_array)),
                 "logprobs/std_training": float(np.std(training_lp_array)),
                 "logprobs/min_training": float(np.min(training_lp_array)),
                 "logprobs/p50_training": float(np.percentile(training_lp_array, 50)),
+                "logprobs/diff": avg_logprob_diff,
             }
-
-            # Calculate logprob drift
-            if hasattr(self, "logprob_stats") and "logprobs/mean" in self.logprob_stats:
-                ref_mean = self.logprob_stats["logprobs/mean"]
-                train_mean = float(np.mean(training_lp_array))
-                self.training_logprob_stats["logprobs/diff"] = ref_mean - train_mean
         else:
             self.training_logprob_stats = {}
 
@@ -324,20 +352,35 @@ class TinkerAtroposTrainer:
         )
         print(f"Sampling client updated: {new_path}")
 
-        step_time = time.time() - step_start
-        metrics["step_time"] = step_time
-        metrics["learning_rate"] = self.learning_rate
-        metrics["loss"] = fwd_bwd_result.metrics["loss:sum"]
+        # Calculate metrics
+        avg_reward = np.mean(self.group_mean_rewards) if self.group_mean_rewards else 0.0
+        avg_loss = fwd_bwd_result.metrics["loss:sum"]
 
-        if self.group_mean_rewards:
-            metrics["reward/mean"] = np.mean(self.group_mean_rewards)
-            print(f"Reward/mean: {metrics['reward/mean']:.4f}")
+        # END METRICS TRACKING - Write to TXT file
+        self.metrics_tracker.end_step(
+            avg_reward=avg_reward,
+            avg_loss=avg_loss,
+            train_tokens=train_tokens,
+            sampling_tokens=sampling_tokens,
+            avg_logprob_diff=avg_logprob_diff,
+        )
 
+        # Prepare return metrics
+        metrics = {
+            "step": step,
+            "learning_rate": self.learning_rate,
+            "loss": avg_loss,
+            "reward/mean": avg_reward,
+        }
+
+        print(f"Reward/mean: {avg_reward:.4f}")
+
+        # WandB logging
         if self.config.use_wandb:
             wandb_metrics = {
-                "train/loss": fwd_bwd_result.metrics["loss:sum"],
+                "train/loss": avg_loss,
                 "train/learning_rate": self.learning_rate,
-                "reward/mean": metrics["reward/mean"],
+                "reward/mean": avg_reward,
             }
 
             if hasattr(self, "logprob_stats"):
@@ -359,16 +402,20 @@ class TinkerAtroposTrainer:
 
         await self.setup()
 
-        for step in range(self.num_steps):
-            try:
-                metrics = await self.train_step(step)
-                print(f"\nStep {step} complete - Loss: {metrics.get('loss', 'N/A')}")
-            except Exception as e:
-                print(f"Error in step {step}: {e}")
-                import traceback
+        try:
+            for step in range(self.num_steps):
+                try:
+                    metrics = await self.train_step(step)
+                    print(f"\nStep {step} complete - Loss: {metrics.get('loss', 'N/A')}")
+                except Exception as e:
+                    print(f"Error in step {step}: {e}")
+                    import traceback
 
-                traceback.print_exc()
-                break
+                    traceback.print_exc()
+                    break
+        finally:
+            # Close metrics tracker
+            self.metrics_tracker.close()
 
         print("\n" + "=" * 60)
         print("Training complete!")
