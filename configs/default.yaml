@@ -8,11 +8,11 @@ learning_rate: 0.00004
 
 # Training configuration
 num_steps: 20
-batch_size: 128
+batch_size: 1024
 group_size: 16
 max_token_env_length: 256
 max_token_trainer_length: 2048
-max_num_workers: 24
+max_num_workers: 192
 max_batches_offpolicy: 3
 
 # Weights & Biases configuration

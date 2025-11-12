@@ -16,7 +16,7 @@ from atroposlib.envs.base import (
 from atroposlib.type_definitions import Item
 from tinker_atropos.config import TinkerAtroposConfig
 
-CONFIG_PATH = "configs/default.yaml"
+CONFIG_PATH = "../../configs/default.yaml"
 
 question_suffix = " Provide a numerical answer without units, written inside \\boxed{}."
 
@@ -61,9 +61,9 @@ class GSM8kEnv(BaseEnv):
 
     @classmethod
     def config_init(cls) -> Tuple[BaseEnvConfig, List[APIServerConfig]]:
-        config = (
-            TinkerAtroposConfig.from_yaml(CONFIG_PATH) if CONFIG_PATH else TinkerAtroposConfig()
-        )
+        config = TinkerAtroposConfig.from_yaml(
+            CONFIG_PATH
+        )  # if CONFIG_PATH else TinkerAtroposConfig()
 
         env_config = BaseEnvConfig(
             tokenizer_name=config.base_model,
@@ -77,7 +77,8 @@ class GSM8kEnv(BaseEnv):
             max_num_workers=config.max_num_workers,
             max_batches_offpolicy=config.max_batches_offpolicy,
             wandb_name=f"{config.wandb_run_name}-env",
-            ensure_scores_not_the_same=config.ensure_scores_not_the_same,
+            ensure_scores_are_not_same=config.ensure_scores_not_the_same,
+            # max_num_workers_per_node=config.max_num_workers
         )
         server_configs = [
             APIServerConfig(
@@ -129,8 +130,8 @@ class GSM8kEnv(BaseEnv):
                 "{% endfor %}"
             )
 
-        self.train = load_dataset("gsm8k", "main", split="train").shuffle(seed=42)
-        test_data = load_dataset("gsm8k", "main", split="test").shuffle(seed=42)
+        self.train = load_dataset("gsm8k", "main", split="train").shuffle(seed=121212)
+        test_data = load_dataset("gsm8k", "main", split="test").shuffle(seed=121212)
         self.test = list()
         for item in test_data:
             self.test.append(

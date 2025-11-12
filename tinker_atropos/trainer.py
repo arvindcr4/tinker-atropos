@@ -159,9 +159,9 @@ class TinkerAtroposTrainer:
             advantages = scores - original_mean
 
             # Skip groups where all advantages are zero
-            if len(scores) > 1 and np.all(advantages == 0.0):
-                skipped_count += 1
-                continue
+            # if len(scores) > 1 and np.all(advantages == 0.0):
+            #     skipped_count += 1
+            #     continue
 
             group_mean_rewards.append(original_mean)
 
