@@ -1,37 +1,39 @@
-# Default configuration for Tinker-Atropos training
-# This file demonstrates all available configuration options
+# Math environment configuration for Tinker-Atropos
+# Supports long-context models and reasoning-intensive problems
 
-# Model configuration
-base_model: "Qwen/Qwen3-4B-Instruct-2507"
-lora_rank: 32
-learning_rate: 0.00004
+# Environment configuration
+env:
+  group_size: 16
+  batch_size: 16
+  max_batches_offpolicy: 3
+  tokenizer_name: "Qwen/Qwen3-4B-Instruct-2507"
+  use_wandb: true
+  rollout_server_url: "http://localhost:8000"
+  wandb_name: "atropos-tinker-math-env"
+  ensure_scores_not_the_same: false
+  max_token_length: 16384
+  max_num_workers: 24
+  total_steps: 50
+  steps_per_eval: 25
 
-# Training configuration
-num_steps: 50
-batch_size: 16
-group_size: 16
-max_token_env_length: 16384
-max_token_trainer_length: 16384
-max_num_workers: 24
-max_batches_offpolicy: 3
+# OpenAI-compatible server configuration
+openai:
+  - model_name: "Qwen/Qwen3-4B-Instruct-2507"
+    base_url: "http://localhost:8001/v1"
+    api_key: "x"
+    weight: 1.0
+    num_requests_for_eval: 256
 
-# Weights & Biases configuration
-use_wandb: true
-wandb_project: "atropos-tinker"
-wandb_group: null  # Will be auto-generated if not specified
-wandb_run_name: "atropos-tinker-run"
+# Tinker-specific configuration
+tinker:
+  lora_rank: 32
+  learning_rate: 0.00004
+  max_token_trainer_length: 16384
+  checkpoint_dir: "./temp/"
+  save_checkpoint_interval: 0
+  wandb_project: "atropos-tinker"
+  wandb_group: null
+  wandb_run_name: "atropos-tinker-run"
 
-# API endpoints
-atropos_api_url: "http://localhost:8000"
-inference_api_url: "http://localhost:8001"
-
-# Checkpoint configuration (needed for Atropos BaseEnvConfig - not used)
-checkpoint_dir: "./temp/"
-save_checkpoint_interval: 0
-
-# Evaluation configuration
-steps_per_eval: 25
-num_requests_for_eval: 256
-
-# Training options
-ensure_scores_not_the_same: false
+slurm: false
+testing: false
