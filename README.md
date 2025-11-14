@@ -23,7 +23,7 @@ export TINKER_API_KEY="<your-key>"
 python launch_training.py --config configs/default.yaml --num-steps 10
 
 # Terminal 3: Start environment
-python tinker_atropos/environments/gsm8k_tinker.py serve
+python tinker_atropos/environments/gsm8k_tinker.py serve --config configs/default.yaml
 ```
 
 This runs a 10-step training example with Llama-3.1-8B-Instruct on the GSM8k environment. To use a different configuration file for the environment, modify the `CONFIG_PATH` variable at the top of `gsm8k_tinker.py`.
@@ -115,14 +115,63 @@ python launch_training.py --config configs/default.yaml --num-steps 100 --no-wan
 - `default.yaml` - Standard configuration for typical training runs
 - `quick_test.yaml` - Minimal configuration for testing and debugging
 
-### Configuration Options
+### Configuration Structure
 
-- **Tinker / Model Parameters**: `base_model`, `lora_rank`, `learning_rate`
-- **Training**: `num_steps`, `batch_size`, `group_size`, `max_token_env_length`, `max_token_trainer_length`
-- **Wandb**: `use_wandb`, `wandb_project`, `wandb_group`, `wandb_run_name`
-- **APIs**: `atropos_api_url`, `inference_api_url`
+Configs follow the Atropos format with a `tinker` section for Tinker-specific settings:
 
-See `configs/` for complete parameter lists.
+```yaml
+env:
+  # Standard Atropos environment config
+  group_size: 16
+  batch_size: 128
+  tokenizer_name: "meta-llama/Llama-3.1-8B-Instruct"
+  # ... more settings
+
+openai:
+  # Standard Atropos server config
+  - model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    base_url: "http://localhost:8001/v1"
+    # ... more settings
+
+tinker:
+  # Tinker-specific training config
+  lora_rank: 32
+  learning_rate: 0.00004
+  # ... more settings
+```
+
+See `configs/default.yaml` for the complete configuration options.
+
+### Adapting Existing Atropos Configs
+
+To use an existing Atropos environment config with Tinker:
+
+1. Add a `tinker` section with training parameters:
+   ```yaml
+   tinker:
+     lora_rank: 32
+     learning_rate: 0.00004
+     max_token_trainer_length: 2048
+     checkpoint_dir: "./checkpoints/"
+     save_checkpoint_interval: 0
+     wandb_project: "my-project"
+     wandb_group: null
+     wandb_run_name: "my-run"
+   ```
+
+2. Ensure your environment uses `managed_server` with stop sequences:
+   ```python
+   async with self.server.managed_server(tokenizer=self.tokenizer) as managed:
+       chat_completion = await managed.chat_completion(
+           messages=messages,
+           n=self.config.group_size,
+           max_tokens=self.config.max_token_length,
+           temperature=1.0,
+           stop=[self.tokenizer.eos_token_id],  # Add stop sequences
+       )
+   ```
+
+3. That's it! The config is ready to use with both Atropos and Tinker.
 
 ### Programmatic Usage
 
@@ -133,11 +182,22 @@ from tinker_atropos.trainer import TinkerAtroposTrainer
 # Load from YAML
 config = TinkerAtroposConfig.from_yaml("configs/default.yaml")
 
-# Or use defaults
+# Access nested config values
+print(f"Model: {config.env.tokenizer_name}")
+print(f"LoRA rank: {config.tinker.lora_rank}")
+print(f"Group size: {config.env.group_size}")
+
+# Or use convenience properties
+print(f"Model: {config.base_model}")  # -> config.env.tokenizer_name
+print(f"LoRA rank: {config.lora_rank}")  # -> config.tinker.lora_rank
+print(f"Learning rate: {config.learning_rate}")  # -> config.tinker.learning_rate
+
+# Use defaults (creates default config)
 config = TinkerAtroposConfig()
 
-# Initialize trainer
+# Initialize and run trainer
 trainer = TinkerAtroposTrainer(config=config)
+await trainer.run()
 ```
 
 ## Testing

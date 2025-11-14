@@ -149,12 +149,12 @@ class TinkerAtroposTrainer:
             original_mean = np.mean(scores)
             advantages = scores - original_mean
 
+            group_mean_rewards.append(original_mean)
+
             # Skip groups where all advantages are zero
             if len(scores) > 1 and np.all(advantages == 0.0):
                 skipped_count += 1
                 continue
-
-            group_mean_rewards.append(original_mean)
 
             # Apply advantage overrides
             if item.get("overrides") is not None:
@@ -286,7 +286,11 @@ class TinkerAtroposTrainer:
         fwd_bwd_result = await fwd_bwd_result.result_async()
         optim_result = await optim_result.result_async()
 
-        print(f"Loss: {fwd_bwd_result.metrics['loss:sum']}")
+        loss_val = (
+            fwd_bwd_result.metrics["loss:sum"] if "loss:sum" in fwd_bwd_result.metrics else 0.0
+        )
+
+        print(f"Loss: {loss_val}")
 
         # Calculate training logprob stats
         training_logprobs_all = []
@@ -327,7 +331,7 @@ class TinkerAtroposTrainer:
         step_time = time.time() - step_start
         metrics["step_time"] = step_time
         metrics["learning_rate"] = self.learning_rate
-        metrics["loss"] = fwd_bwd_result.metrics["loss:sum"]
+        metrics["loss"] = loss_val
 
         if self.group_mean_rewards:
             metrics["reward/mean"] = np.mean(self.group_mean_rewards)
@@ -335,7 +339,7 @@ class TinkerAtroposTrainer:
 
         if self.config.use_wandb:
             wandb_metrics = {
-                "train/loss": fwd_bwd_result.metrics["loss:sum"],
+                "train/loss": loss_val,
                 "train/learning_rate": self.learning_rate,
                 "reward/mean": metrics["reward/mean"],
             }

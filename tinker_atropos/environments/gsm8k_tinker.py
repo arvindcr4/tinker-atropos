@@ -270,6 +270,7 @@ class GSM8kEnv(BaseEnv):
                 n=self.config.group_size,
                 max_tokens=self.config.max_token_length,
                 temperature=1.0,
+                stop=[self.tokenizer.eos_token_id],
             )
 
             state = managed.get_state()
