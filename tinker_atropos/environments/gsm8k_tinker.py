@@ -77,7 +77,7 @@ class GSM8kEnv(BaseEnv):
             max_num_workers=config.max_num_workers,
             max_batches_offpolicy=config.max_batches_offpolicy,
             wandb_name=f"{config.wandb_run_name}-env",
-            ensure_scores_not_the_same=config.ensure_scores_not_the_same,
+            ensure_scores_are_not_same=config.ensure_scores_are_not_same,
         )
         server_configs = [
             APIServerConfig(
