@@ -22,7 +22,7 @@ class EnvConfig(BaseModel):
     use_wandb: bool = True
     rollout_server_url: str = "http://localhost:8000"
     wandb_name: str = "atropos-tinker-env"
-    ensure_scores_not_the_same: bool = False
+    ensure_scores_are_not_same: bool = False
     max_token_length: int = 256
     max_num_workers: int = 24
     total_steps: int = 50
@@ -124,8 +124,8 @@ class TinkerAtroposConfig(BaseModel):
         return self.env.max_num_workers
 
     @property
-    def ensure_scores_not_the_same(self) -> bool:
-        return self.env.ensure_scores_not_the_same
+    def ensure_scores_are_not_same(self) -> bool:
+        return self.env.ensure_scores_are_not_same
 
     @property
     def wandb_run_name(self) -> str:

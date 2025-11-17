@@ -31,7 +31,7 @@ tinker:
   max_token_trainer_length: 2048
   checkpoint_dir: "./temp/"
   save_checkpoint_interval: 0
-  wandb_project: "atropos-tinker-test"
+  wandb_project: "atropos-tinker"
   wandb_group: null
   wandb_run_name: "atropos-tinker-test-run"
 
