@@ -20,59 +20,52 @@ run-api
 
 # Terminal 2: Start training
 export TINKER_API_KEY="<your-key>"
-python launch_training.py --config configs/default.yaml --num-steps 10
+python launch_training.py --config configs/default.yaml
 
-# Terminal 3: Start environment
+# Terminal 3: Start environment (use built-in or any Atropos environment)
 python tinker_atropos/environments/gsm8k_tinker.py serve --config configs/default.yaml
 ```
 
-This runs a 10-step training example with Llama-3.1-8B-Instruct on the GSM8k environment. To use a different configuration file for the environment, modify the `CONFIG_PATH` variable at the top of `gsm8k_tinker.py`.
+This runs a 50-step training example with Llama-3.1-8B-Instruct on the GSM8k environment.
 
-## Integration with Atropos Environments
+## Using Any Atropos Environment
 
-Atropos environments that utilize the following inference pattern are compatible with the Tinker trainer:
+**You can use any existing Atropos environment directly with Tinker!** Just point to it and pass your Tinker config:
 
-```python
-async with self.server.managed_server(tokenizer=self.tokenizer) as managed:
-    chat_completion = await managed.chat_completion(
-        messages=messages,
-        n=self.config.group_size,
-        max_tokens=self.config.max_token_length,
-        temperature=1.0,
-    )
-
-    state = managed.get_state()
-    nodes = state["nodes"]
+```bash
+# Use any Atropos environment with Tinker training
+python /path/to/atropos/environment.py serve --config /path/to/your_tinker_config.yaml
 ```
 
-### Implementation Guide for Existing Atropos Environments
+### Example with Atropos Math Environment
 
-1. Load the `TinkerAtroposConfig` within your environment's initialization (inside `config.init`), specifying the path to your desired configuration file:
+```bash
+# Terminal 1: Start Atropos API
+run-api
 
-```python
-config = TinkerAtroposConfig.from_yaml("configs/default.yaml")
+# Terminal 2: Start Tinker training with math config
+export TINKER_API_KEY="<your-key>"
+python launch_training.py --config configs/math_config.yaml
+
+# Terminal 3: Use Atropos math environment with Tinker config
+python ~/atropos/environments/math_server.py serve --config configs/math_config.yaml
 ```
 
-2. Configure the `BaseEnvConfig` (or your custom configuration class) to utilize the loaded values:
+### How It Works
 
-```python
-env_config = BaseEnvConfig(
-    tokenizer_name=config.base_model,
-    group_size=config.group_size,
-    use_wandb=config.use_wandb,
-    rollout_server_url=config.atropos_api_url,
-    total_steps=config.num_steps,
-    batch_size=config.batch_size,
-    steps_per_eval=config.steps_per_eval,
-    max_token_length=config.max_token_env_length,
-    max_num_workers=config.max_num_workers,
-    max_batches_offpolicy=config.max_batches_offpolicy,
-    wandb_name=f"{config.wandb_run_name}-env",
-    ensure_scores_not_the_same=config.ensure_scores_not_the_same,
-)
-```
+Atropos environments support a `--config` flag that loads your Tinker config (which follows the standard Atropos format with a `tinker` section). The environment uses:
+- The `env` section for environment configuration
+- The `openai` section for inference server configuration
+- The `tinker` section is used by the trainer (ignored by the environment)
 
-3. Ensure your environment uses the `self.server.managed_server` pattern for inference requests as demonstrated above. No additional modifications are required for Tinker integration.
+**No modifications needed** - any Atropos environment using `managed_server` is compatible!
+
+### Built-in Example Environments
+
+This repo includes an example environment in `tinker_atropos/environments/`:
+- `gsm8k_tinker.py` - Math reasoning with GSM8k dataset
+
+These demonstrate integration patterns and custom reward functions.
 
 
 ## Downloading Weights
@@ -112,8 +105,8 @@ python launch_training.py --config configs/default.yaml --num-steps 100 --no-wan
 
 ### Available Configs
 
-- `default.yaml` - Standard configuration for typical training runs
-- `quick_test.yaml` - Minimal configuration for testing and debugging
+- `default.yaml` - Standard GSM8k config (50 steps, batch_size=128, Llama-3.1-8B)
+- `quick_test.yaml` - Quick test (10 steps, Llama-3.1-8B, no wandb)
 
 ### Configuration Structure
 
