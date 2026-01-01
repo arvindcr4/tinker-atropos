@@ -1,6 +1,6 @@
 # tinker-atropos
 
-An integration layer connecting Atropos with the Thinking Machines Tinker API (https://thinkingmachines.ai/tinker/). This package enables seamless model training with Atropos environments from your local machine, abstracting away compute management and infrastructure concerns.
+An integration layer connecting Atropos (https://github.com/NousResearch/atropos) with the Thinking Machines Tinker API (https://thinkingmachines.ai/tinker/). This package enables seamless model training with Atropos environments from your local machine, abstracting away compute management and infrastructure concerns.
 
 ## Installation
 
