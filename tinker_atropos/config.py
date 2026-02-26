@@ -88,7 +88,9 @@ class TinkerAtroposConfig(BaseModel):
         if self.openai:
             # Remove /v1 suffix if present
             url = self.openai[0].base_url
-            return url.rstrip("/v1").rstrip("/")
+            if url.endswith("/v1"):
+                url = url[:-3]
+            return url.rstrip("/")
         return "http://localhost:8001"
 
     @property
