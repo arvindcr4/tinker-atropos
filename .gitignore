@@ -45,3 +45,9 @@ htmlcov/
 
 # OS
 .DS_Store
+
+# wandb
+wandb/
+
+# Checkpoints
+checkpoints/
