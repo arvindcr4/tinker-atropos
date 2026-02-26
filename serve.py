@@ -9,7 +9,6 @@ Usage:
 """
 
 import argparse
-import asyncio
 import random
 import time
 
@@ -164,7 +163,7 @@ async def logprobs(request: LogprobsRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def main():
+def main():
     global sampling_client, tokenizer, model_name
 
     parser = argparse.ArgumentParser(description="Tinker inference server")
@@ -202,4 +201,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

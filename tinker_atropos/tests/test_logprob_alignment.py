@@ -22,7 +22,7 @@ class TestLogprobAlignment:
             ]
         }
 
-        datums, group_rewards = trainer.pad_data_to_good_offset(batch_data)
+        datums, group_rewards, _ = trainer.pad_data_to_good_offset(batch_data)
         assert len(datums) == 1
 
         datum = datums[0]
@@ -50,7 +50,7 @@ class TestLogprobAlignment:
             ]
         }
 
-        datums, _ = trainer.pad_data_to_good_offset(batch_data)
+        datums, _, _ = trainer.pad_data_to_good_offset(batch_data)
         advantages = datums[0].loss_fn_inputs["advantages"].to_torch().tolist()
 
         assert advantages[0] == 0.0
@@ -70,7 +70,7 @@ class TestLogprobAlignment:
             ]
         }
 
-        datums, _ = trainer.pad_data_to_good_offset(batch_data)
+        datums, _, _ = trainer.pad_data_to_good_offset(batch_data)
         advantages = datums[0].loss_fn_inputs["advantages"].to_torch().tolist()
 
         assert all(a == 0.0 for a in advantages)
@@ -93,7 +93,7 @@ class TestLogprobAlignment:
             ]
         }
 
-        datums, _ = trainer.pad_data_to_good_offset(batch_data)
+        datums, _, _ = trainer.pad_data_to_good_offset(batch_data)
         advantages = datums[0].loss_fn_inputs["advantages"].to_torch().tolist()
 
         assert all(a == 2.0 for a in advantages)
@@ -116,7 +116,7 @@ class TestLogprobAlignment:
             ]
         }
 
-        datums, _ = trainer.pad_data_to_good_offset(batch_data)
+        datums, _, _ = trainer.pad_data_to_good_offset(batch_data)
 
         target_tokens = datums[0].loss_fn_inputs["target_tokens"].to_torch().tolist()
         logprobs = datums[0].loss_fn_inputs["logprobs"].to_torch().tolist()
@@ -135,7 +135,7 @@ class TestLogprobAlignment:
             ]
         }
 
-        datums, _ = trainer.pad_data_to_good_offset(batch_data)
+        datums, _, _ = trainer.pad_data_to_good_offset(batch_data)
         advantages = datums[0].loss_fn_inputs["advantages"].to_torch().tolist()
 
         assert all(a == 0.0 for a in advantages)
@@ -157,7 +157,7 @@ class TestLogprobAlignment:
             ]
         }
 
-        datums, _ = trainer.pad_data_to_good_offset(batch_data)
+        datums, _, _ = trainer.pad_data_to_good_offset(batch_data)
         advantages = datums[0].loss_fn_inputs["advantages"].to_torch().tolist()
 
         assert advantages[0] == 0.0
@@ -182,7 +182,7 @@ class TestLogprobAlignment:
             ]
         }
 
-        datums, group_rewards = trainer.pad_data_to_good_offset(batch_data)
+        datums, group_rewards, _ = trainer.pad_data_to_good_offset(batch_data)
 
         assert len(datums) == 2
         assert len(group_rewards) == 1
@@ -219,7 +219,7 @@ class TestLogprobAlignment:
             ]
         }
 
-        datums, _ = trainer.pad_data_to_good_offset(batch_data)
+        datums, _, _ = trainer.pad_data_to_good_offset(batch_data)
 
         advantages1 = datums[0].loss_fn_inputs["advantages"].to_torch().tolist()
         assert advantages1[1] == 1.0
@@ -244,10 +244,10 @@ class TestLogprobAlignment:
             ]
         }
 
-        datums, group_rewards = trainer.pad_data_to_good_offset(batch_data)
+        datums, group_rewards, _ = trainer.pad_data_to_good_offset(batch_data)
 
         assert len(datums) == 0
-        assert len(group_rewards) == 0
+        assert len(group_rewards) == 1  # we don't skip this output when all advantages are zero
 
 
 class TestLogprobStatistics:
@@ -331,7 +331,7 @@ class TestEdgeCases:
             ]
         }
 
-        datums, _ = trainer.pad_data_to_good_offset(batch_data)
+        datums, _, _ = trainer.pad_data_to_good_offset(batch_data)
 
         assert len(datums) == 2
         input_tokens = datums[0].model_input.to_ints()
@@ -354,7 +354,7 @@ class TestEdgeCases:
             ]
         }
 
-        datums, _ = trainer.pad_data_to_good_offset(batch_data)
+        datums, _, _ = trainer.pad_data_to_good_offset(batch_data)
         advantages = datums[0].loss_fn_inputs["advantages"].to_torch().tolist()
 
         assert advantages[0] == 0.0
@@ -363,7 +363,7 @@ class TestEdgeCases:
     def test_empty_batch(self, trainer):
         batch_data = {"batch": []}
 
-        datums, group_rewards = trainer.pad_data_to_good_offset(batch_data)
+        datums, group_rewards, _ = trainer.pad_data_to_good_offset(batch_data)
 
         assert len(datums) == 0
         assert len(group_rewards) == 0
@@ -385,7 +385,7 @@ class TestEdgeCases:
             ]
         }
 
-        datums, _ = trainer.pad_data_to_good_offset(batch_data)
+        datums, _, _ = trainer.pad_data_to_good_offset(batch_data)
 
         assert len(datums) == 2
         advantages = datums[0].loss_fn_inputs["advantages"].to_torch().tolist()
