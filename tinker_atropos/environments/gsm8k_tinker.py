@@ -1,4 +1,6 @@
+import os
 import random
+import sys
 import time
 from typing import Dict, List, Optional, Tuple, TypedDict, Union
 
@@ -16,7 +18,14 @@ from atroposlib.envs.base import (
 from atroposlib.type_definitions import Item
 from tinker_atropos.config import TinkerAtroposConfig
 
-CONFIG_PATH = "configs/default.yaml"
+# Check for --config CLI arg or env var, fallback to default
+def _get_config_path():
+    for i, arg in enumerate(sys.argv):
+        if arg == "--config" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return os.environ.get("TINKER_CONFIG_PATH", "configs/default.yaml")
+
+CONFIG_PATH = _get_config_path()
 
 question_suffix = " Provide a numerical answer without units, written inside \\boxed{}."
 

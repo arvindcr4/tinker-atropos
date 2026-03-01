@@ -1,0 +1,36 @@
+# MATH Competition GRPO - Qwen3-8B
+# Experiment: Competition math (harder than GSM8K)
+
+env:
+  group_size: 16
+  batch_size: 128
+  max_batches_offpolicy: 3
+  tokenizer_name: "Qwen/Qwen3-8B"
+  use_wandb: false
+  rollout_server_url: "http://localhost:8012"
+  wandb_name: "math-qwen3-8b-env"
+  ensure_scores_are_not_same: false
+  max_token_length: 1024
+  max_num_workers: 24
+  total_steps: 50
+  steps_per_eval: 25
+
+openai:
+  - model_name: "Qwen/Qwen3-8B"
+    base_url: "http://localhost:8013/v1"
+    api_key: "x"
+    weight: 1.0
+    num_requests_for_eval: 256
+
+tinker:
+  lora_rank: 32
+  learning_rate: 0.00004
+  max_token_trainer_length: 2048
+  checkpoint_dir: "./checkpoints/math_qwen8b/"
+  save_checkpoint_interval: 10
+  wandb_project: "tinker-rl-scaling"
+  wandb_group: "math-scaling-ladder"
+  wandb_run_name: "math-qwen3-8b"
+
+slurm: false
+testing: false

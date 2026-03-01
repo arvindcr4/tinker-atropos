@@ -66,10 +66,11 @@ class TinkerAtroposTrainer:
         self.tokenizer = AutoTokenizer.from_pretrained(self.base_model)
         print(f"Loaded tokenizer for {self.base_model}")
 
-        # Create LoRA training client
-        print("Creating training client...")
+        # Create LoRA training client - use tinker_model if different from tokenizer
+        tinker_model = self.config.tinker_model
+        print(f"Creating training client for {tinker_model}...")
         self.training_client = await self.service_client.create_lora_training_client_async(
-            base_model=self.base_model,
+            base_model=tinker_model,
             rank=self.lora_rank,
         )
         print("Training client created")
@@ -99,7 +100,7 @@ class TinkerAtroposTrainer:
                 print(f"Wandb initialized (trainer): {wandb.run.name} in group: {self.wandb_group}")
             except Exception as e:
                 print(f"Error initializing wandb: {e}")
-                self.config.use_wandb = False
+                self.config.env.use_wandb = False
 
     async def _register_trainer(self) -> str:
         """Register this trainer with the Atropos API server."""
@@ -830,11 +831,11 @@ async def logprobs(request: LogprobsRequest):
         raise HTTPException(status_code=500, detail=f"Logprobs computation failed: {str(e)}")
 
 
-def run_fastapi_server():
+def run_fastapi_server(port=8001):
     """Run FastAPI server in background thread."""
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
 
 async def main():
@@ -853,7 +854,7 @@ async def main():
     # Start FastAPI server in background thread for Atropos to call
     import threading
 
-    server_thread = threading.Thread(target=run_fastapi_server, daemon=True)
+    server_thread = threading.Thread(target=run_fastapi_server, args=(8001,), daemon=True)
     server_thread.start()
 
     print("Waiting for FastAPI server to start...")

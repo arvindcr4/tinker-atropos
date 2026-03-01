@@ -47,6 +47,7 @@ class TinkerConfig(BaseModel):
     max_token_trainer_length: int = 2048
     checkpoint_dir: str = "./temp/"
     save_checkpoint_interval: int = 0
+    tinker_model_name: Optional[str] = None  # Override model name for Tinker API (if different from tokenizer)
 
     # Wandb configuration for trainer
     wandb_project: str = "atropos-tinker"
@@ -76,6 +77,11 @@ class TinkerAtroposConfig(BaseModel):
     def base_model(self) -> str:
         """Convenience accessor for model name"""
         return self.env.tokenizer_name
+
+    @property
+    def tinker_model(self) -> str:
+        """Model name for Tinker API - may differ from tokenizer name for gated models"""
+        return self.tinker.tinker_model_name or self.base_model
 
     @property
     def atropos_api_url(self) -> str:

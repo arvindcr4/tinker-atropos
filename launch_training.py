@@ -76,6 +76,9 @@ def load_config(args) -> TinkerAtroposConfig:
     if overrides:
         print(f"Applying CLI overrides: {overrides}")
         config_dict = config.to_dict()
+        # Handle nested config fields
+        if "use_wandb" in overrides:
+            config_dict["env"]["use_wandb"] = overrides.pop("use_wandb")
         config_dict.update(overrides)
         config = TinkerAtroposConfig(**config_dict)
 
@@ -125,9 +128,11 @@ async def main():
     # Start FastAPI inference server in background thread
     from tinker_atropos.trainer import run_fastapi_server
     import threading
+    from urllib.parse import urlparse
 
-    print("Starting FastAPI inference server on port 8001...")
-    server_thread = threading.Thread(target=run_fastapi_server, daemon=True)
+    inference_port = urlparse(config.inference_api_url).port or 8001
+    print(f"Starting FastAPI inference server on port {inference_port}...")
+    server_thread = threading.Thread(target=run_fastapi_server, args=(inference_port,), daemon=True)
     server_thread.start()
 
     print("Waiting for FastAPI server to start...")

@@ -1,0 +1,38 @@
+# GSM8K GRPO - Llama 3.1-8B-Instruct (Scaling experiment)
+# Experiment: GRPO scaling ladder - 8B parameter point (Llama family)
+# Uses NousResearch mirror for tokenizer (meta-llama is gated)
+
+env:
+  group_size: 16
+  batch_size: 128
+  max_batches_offpolicy: 3
+  tokenizer_name: "NousResearch/Meta-Llama-3.1-8B-Instruct"
+  use_wandb: false
+  rollout_server_url: "http://localhost:8006"
+  wandb_name: "gsm8k-llama3.1-8b-env"
+  ensure_scores_are_not_same: false
+  max_token_length: 512
+  max_num_workers: 24
+  total_steps: 50
+  steps_per_eval: 25
+
+openai:
+  - model_name: "NousResearch/Meta-Llama-3.1-8B-Instruct"
+    base_url: "http://localhost:8007/v1"
+    api_key: "x"
+    weight: 1.0
+    num_requests_for_eval: 256
+
+tinker:
+  lora_rank: 32
+  learning_rate: 0.00004
+  max_token_trainer_length: 2048
+  checkpoint_dir: "./checkpoints/gsm8k_llama8b/"
+  save_checkpoint_interval: 10
+  wandb_project: "tinker-rl-scaling"
+  wandb_group: "gsm8k-scaling-ladder"
+  wandb_run_name: "gsm8k-llama3.1-8b"
+  tinker_model_name: "meta-llama/Llama-3.1-8B-Instruct"
+
+slurm: false
+testing: false
